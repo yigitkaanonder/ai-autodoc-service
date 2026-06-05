@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+#Documents
+/docs/*
+!/docs/.gitkeep
+
+#DS_Store
+.DS_Store
