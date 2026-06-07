@@ -3,8 +3,10 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
+from sqlalchemy.orm import Session
+from database import get_db
 from services.github import (
     get_github_auth_url,
     exchange_code_for_token,
@@ -12,12 +14,11 @@ from services.github import (
     get_user_info,
     create_webhook
 )
+from services.user_service import save_user_token, get_user_token
+
+load_dotenv()
 
 router = APIRouter()
-
-# Temporary in-memory token storage
-# In production this would be a database or session
-active_tokens = {}
 
 @router.get("/auth/login")
 def login():
@@ -26,7 +27,7 @@ def login():
     return RedirectResponse(url=github_url)
 
 @router.get("/auth/callback")
-def callback(code: str):
+def callback(code: str, db: Session = Depends(get_db)):
     # Exchange code for access token
     access_token = exchange_code_for_token(code)
     if not access_token:
@@ -38,14 +39,14 @@ def callback(code: str):
     # Get user info and store token
     user = get_user_info(access_token)
     username = user.get("login")
-    active_tokens[username] = access_token
+    save_user_token(db, username, access_token)
 
     return RedirectResponse(url=f"/?username={username}")
 
 @router.get("/repos")
-def list_repos(username: str):
+def list_repos(username: str, db: Session = Depends(get_db)):
     # Get token for this user
-    access_token = active_tokens.get(username)
+    access_token = get_user_token(db, username)
     if not access_token:
         return JSONResponse(
             status_code=401,
@@ -67,8 +68,8 @@ def list_repos(username: str):
     return JSONResponse(content={"username": username, "repos": repo_list})
 
 @router.post("/repos/activate")
-def activate_repo(username: str, repo_full_name: str):
-    access_token = active_tokens.get(username)
+def activate_repo(username: str, repo_full_name: str, db: Session = Depends(get_db)):
+    access_token = get_user_token(db, username)
     if not access_token:
         return JSONResponse(
             status_code=401,

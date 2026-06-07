@@ -1,7 +1,10 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+from database import get_db
 from services.github import get_file_content
-from routers.auth import active_tokens
+from services.user_service import get_user_token
+from pipeline import process_file
 
 router = APIRouter()
 
@@ -9,7 +12,7 @@ router = APIRouter()
 SUPPORTED_EXTENSIONS = (".py", ".js", ".ts", ".go", ".java", ".cpp")
 
 @router.post("/webhook/github")
-async def github_webhook(request: Request):
+async def github_webhook(request: Request, db: Session = Depends(get_db)):
     payload = await request.json()
 
     repo_name = payload.get("repository", {}).get("full_name")
@@ -34,7 +37,7 @@ async def github_webhook(request: Request):
         return JSONResponse(content={"status": "no_code_files"})
     # Will be stored in database in real implementation.
     repo_owner = repo_name.split("/")[0]
-    access_token = active_tokens.get(repo_owner)
+    access_token = get_user_token(db, repo_owner)
     if not access_token:
         print(f"[Webhook] No token for {repo_owner}, cannot fetch files")
         return JSONResponse(content={"status": "no_token"})
@@ -44,18 +47,16 @@ async def github_webhook(request: Request):
     # Right now it fetches the whole file for documentation. 
     # But after adding cache it will check only the changed 
     # files and fetch the contents of those functions/classes.
-    files_with_content = []
+    processed = []
     for file_path in code_files:
         content = get_file_content(access_token, repo_name, file_path, ref)
         if content:
-            files_with_content.append({
-                "path": file_path,
-                "content": content
-            })
             print(f"[Webhook] Fetched {file_path} ({len(content)} chars)")
+            doc_path = process_file(file_path, content)
+            processed.append({"file": file_path, "doc": doc_path})
 
     return JSONResponse(content={
-        "status": "files_fetched",
+        "status": "processed",
         "repo": repo_name,
-        "file_count": len(files_with_content)
+        "processed_count": len(processed)
     })
