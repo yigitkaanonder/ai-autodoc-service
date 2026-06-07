@@ -41,3 +41,35 @@ def get_user_info(access_token: str) -> dict:
         }
     )
     return response.json()
+
+def create_webhook(access_token: str, repo_full_name: str, webhook_url: str) -> dict:
+    response = requests.post(
+        f"https://api.github.com/repos/{repo_full_name}/hooks",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github.v3+json"
+        },
+        json={
+            "name": "web",
+            "active": True,
+            "events": ["push"],
+            "config": {
+                "url": webhook_url,
+                "content_type": "json"
+            }
+        }
+    )
+    return response.json()
+
+def get_file_content(access_token: str, repo_full_name: str, file_path: str, ref: str = "main") -> str:
+    response = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}/contents/{file_path}",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github.v3.raw"
+        },
+        params={"ref": ref}
+    )
+    if response.status_code == 200:
+        return response.text
+    return ""

@@ -1,11 +1,16 @@
 import os
+
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import APIRouter
 from fastapi.responses import RedirectResponse, JSONResponse
 from services.github import (
     get_github_auth_url,
     exchange_code_for_token,
     get_user_repos,
-    get_user_info
+    get_user_info,
+    create_webhook
 )
 
 router = APIRouter()
@@ -60,3 +65,34 @@ def list_repos(username: str):
     ]
 
     return JSONResponse(content={"username": username, "repos": repo_list})
+
+@router.post("/repos/activate")
+def activate_repo(username: str, repo_full_name: str):
+    access_token = active_tokens.get(username)
+    if not access_token:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Not authenticated"}
+        )
+
+    ngrok_url = os.getenv("NGROK_URL")
+    if not ngrok_url:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "NGROK_URL not configured"}
+        )
+
+    webhook_url = f"{ngrok_url}/webhook/github"
+    result = create_webhook(access_token, repo_full_name, webhook_url)
+
+    if "id" in result:
+        return JSONResponse(content={
+            "status": "activated",
+            "repo": repo_full_name,
+            "webhook_id": result["id"]
+        })
+    
+    return JSONResponse(
+        status_code=400,
+        content={"error": result.get("message", "Failed to create webhook"), "details": result}
+    )

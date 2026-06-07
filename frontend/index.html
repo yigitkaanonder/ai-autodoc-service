@@ -77,9 +77,26 @@
                                     <span class="badge">${repo.private ? "Private" : "Public"}</span>
                                 </div>
                                 <div class="repo-meta">${repo.full_name}</div>
+                                <button class="btn" style="margin-top:10px" onclick="activateRepo('${repo.full_name}')">
+                                    Activate
+                                </button>
                             </div>
                         `;
                     });
+
+                    window.activateRepo = function(repoFullName) {
+                        fetch(`/repos/activate?username=${username}&repo_full_name=${repoFullName}`, {
+                            method: "POST"
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.status === "activated") {
+                                alert(`Activated! Webhook ID: ${data.webhook_id}`);
+                            } else {
+                                alert(`Error: ${data.error}`);
+                            }
+                        });
+                    };
                 });
         }
     </script>

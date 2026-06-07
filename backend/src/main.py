@@ -16,6 +16,7 @@ load_dotenv()
 sys.path.append(os.path.dirname(__file__))
 
 from routers.auth import router as auth_router
+from routers.webhook import router as webhook_router
 from agents.generator import generate_documentation
 from graph import build_graph
 
@@ -24,6 +25,7 @@ app.mount("/static", StaticFiles(directory="../frontend"), name="static")
 
 # Register routers
 app.include_router(auth_router)
+app.include_router(webhook_router)
 
 @app.get("/")
 def root():
