@@ -15,6 +15,7 @@ from services.github import (
     create_webhook
 )
 from services.user_service import save_user_token, get_user_token
+from services.repo_service import save_repository
 
 load_dotenv()
 
@@ -87,6 +88,7 @@ def activate_repo(username: str, repo_full_name: str, db: Session = Depends(get_
     result = create_webhook(access_token, repo_full_name, webhook_url)
 
     if "id" in result:
+        save_repository(db, username, repo_full_name, result["id"])
         return JSONResponse(content={
             "status": "activated",
             "repo": repo_full_name,

@@ -23,25 +23,27 @@ class Documentation(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     repository_id = Column(Integer, ForeignKey("repositories.id"))
+    function_name = Column(String, nullable=True, index=True)
     file_path = Column(String, index=True)
     content = Column(Text)
     commit_sha = Column(String, nullable=True)
     score = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    is_deleted = Column(Boolean, default=False)
 
     repository = relationship("Repository", back_populates="documentations")
 
-
-class FunctionCache(Base):
-    __tablename__ = "function_cache"
+class FunctionRegistry(Base):
+    __tablename__ = "function_registry"
 
     id = Column(Integer, primary_key=True, index=True)
     repository_id = Column(Integer, ForeignKey("repositories.id"))
     file_path = Column(String, index=True)
     function_name = Column(String, index=True)
-    content_hash = Column(String)  # hash of the function
+    content_hash = Column(String)
     updated_at = Column(DateTime, default=datetime.utcnow)
-
+    is_deleted = Column(Boolean, default=False)
+    
 class User(Base):
     __tablename__ = "users"
 

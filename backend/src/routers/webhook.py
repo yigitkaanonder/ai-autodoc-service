@@ -4,12 +4,17 @@ from sqlalchemy.orm import Session
 from database import get_db
 from services.github import get_file_content
 from services.user_service import get_user_token
-from pipeline import process_file
+from pipeline import process_function
+from services.repo_service import get_repository
+from services.registry_service import diff_functions, mark_file_deleted, update_registry, mark_functions_deleted
+from services.ast_parser import extract_functions
 
 router = APIRouter()
 
 # Which file extensions to document
-SUPPORTED_EXTENSIONS = (".py", ".js", ".ts", ".go", ".java", ".cpp")
+# TODO: This part is reduced to .py for testing purposes.
+# Will be extended to other languages after cache implementation with tree-sitter.
+SUPPORTED_EXTENSIONS = (".py",) #, ".js", ".ts", ".go", ".java", ".cpp")
 
 @router.post("/webhook/github")
 async def github_webhook(request: Request, db: Session = Depends(get_db)):
@@ -19,44 +24,99 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
     pusher = payload.get("pusher", {}).get("name")
     commits = payload.get("commits", [])
     ref = payload.get("ref", "").replace("refs/heads/", "")
+    after_sha = payload.get("after")
 
     # Collect changed files
-    changed_files = set()
+    added_files = set()
+    modified_files = set()
+    deleted_files = set()
     for commit in commits:
-        changed_files.update(commit.get("added", []))
-        changed_files.update(commit.get("modified", []))
+        added_files.update(commit.get("added", []))
+        modified_files.update(commit.get("modified", []))
+        deleted_files.update(commit.get("removed", []))
 
     # Filter to only supported code files
-    code_files = [f for f in changed_files if f.endswith(SUPPORTED_EXTENSIONS)]
+    added_code_files = [f for f in added_files if f.endswith(SUPPORTED_EXTENSIONS)]
+    modified_code_files = [f for f in modified_files if f.endswith(SUPPORTED_EXTENSIONS)]
+    deleted_code_files = [f for f in deleted_files if f.endswith(SUPPORTED_EXTENSIONS)]
 
     print(f"\n[Webhook] Push received: {repo_name} by {pusher}")
-    print(f"[Webhook] Changed files: {list(changed_files)}")
-    print(f"[Webhook] Code files to process: {code_files}")
+    print(f"[Webhook] Added: {added_code_files}")
+    print(f"[Webhook] Modified: {modified_code_files}")
+    print(f"[Webhook] Deleted: {deleted_code_files}")
 
-    if not code_files:
+    if not added_code_files and not modified_code_files and not deleted_code_files:
         return JSONResponse(content={"status": "no_code_files"})
-    # Will be stored in database in real implementation.
+    
     repo_owner = repo_name.split("/")[0]
     access_token = get_user_token(db, repo_owner)
     if not access_token:
         print(f"[Webhook] No token for {repo_owner}, cannot fetch files")
         return JSONResponse(content={"status": "no_token"})
+    
 
-
-    # Fetch each file's content
-    # Right now it fetches the whole file for documentation. 
-    # But after adding cache it will check only the changed 
-    # files and fetch the contents of those functions/classes.
+    repository = get_repository(db, repo_name)
+    if not repository:
+        print(f"[Webhook] Repository {repo_name} not in DB (not activated?)")
+        return JSONResponse(content={"status": "repo_not_found"})
+    
     processed = []
-    for file_path in code_files:
+    skipped = []
+    
+    # --- Handle deleted files ---
+    for file_path in deleted_code_files:
+        mark_file_deleted(db, repository.id, file_path)
+        print(f"[Webhook] File deleted: {file_path}")
+
+    # --- Handle added files (all functions are new, skip diff) ---
+    for file_path in added_code_files:
         content = get_file_content(access_token, repo_name, file_path, ref)
-        if content:
-            print(f"[Webhook] Fetched {file_path} ({len(content)} chars)")
-            doc_path = process_file(file_path, content)
-            processed.append({"file": file_path, "doc": doc_path})
+        if not content:
+            continue
+
+        print(f"[Webhook] New file: {file_path} ({len(content)} chars)")
+        functions = extract_functions(content)
+
+        for func in functions:
+            process_function(db, repository.id, file_path, func["name"], func["source"], after_sha)
+
+        update_registry(db, repository.id, file_path, functions)
+        processed.append(file_path)
+
+    # --- Handle modified files (compare with registry) ---
+    for file_path in modified_code_files:
+        content = get_file_content(access_token, repo_name, file_path, ref)
+        if not content:
+            continue
+
+        print(f"[Webhook] Modified file: {file_path} ({len(content)} chars)")
+        new, changed, deleted = diff_functions(db, repository.id, file_path, content)
+
+        if not new and not changed and not deleted:
+            print(f"[Webhook] {file_path}: no function changes, skipping")
+            skipped.append(file_path)
+            continue
+
+        print(f"[Webhook] {file_path}: {len(new)} new, {len(changed)} changed, {len(deleted)} deleted")
+
+        # New functions: generate from scratch
+        for func in new:
+            process_function(db, repository.id, file_path, func["name"], func["source"], after_sha)
+
+        # Changed functions: for now same as new, later will use router agent
+        # TODO: implement router agent to only update changed parts of documentation
+        for func in changed:
+            process_function(db, repository.id, file_path, func["name"], func["source"], after_sha)
+
+        if deleted:
+            mark_functions_deleted(db, repository.id, file_path, deleted)
+
+        update_registry(db, repository.id, file_path, new + changed)
+        processed.append(file_path)
 
     return JSONResponse(content={
         "status": "processed",
         "repo": repo_name,
-        "processed_count": len(processed)
+        "processed": processed,
+        "skipped": skipped
     })
