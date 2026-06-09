@@ -1,104 +1,13 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Autodoc Service</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-            max-width: 800px;
-            margin: 60px auto;
-            padding: 0 20px;
-            background: #f5f5f5;
-        }
-        h1 { color: #333; }
-        .btn {
-            display: inline-block;
-            padding: 12px 24px;
-            background: #24292e;
-            color: white;
-            text-decoration: none;
-            border-radius: 6px;
-            font-size: 16px;
-        }
-        .btn:hover { background: #444; }
-        .repo-list { margin-top: 30px; }
-        .repo-card {
-            background: white;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            padding: 16px;
-            margin-bottom: 12px;
-        }
-        .repo-name { font-weight: bold; font-size: 18px; }
-        .repo-meta { color: #666; font-size: 14px; margin-top: 4px; }
-        .badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            background: #e1e4e8;
-            margin-left: 8px;
-        }
-    </style>
-</head>
-<body>
-    <h1>AI Autodoc Service</h1>
-
-    <div id="login-section">
-        <p>Connect your GitHub account to get started.</p>
-        <a href="/auth/login" class="btn">Login with GitHub</a>
-    </div>
-
-    <div id="repos-section" style="display:none">
-        <h2>Your Repositories</h2>
-        <div class="repo-list" id="repo-list"></div>
-    </div>
-
-    <script>
-        // Check if username is in URL params
-        const params = new URLSearchParams(window.location.search);
-        const username = params.get("username");
-
-        if (username) {
-            document.getElementById("login-section").style.display = "none";
-            document.getElementById("repos-section").style.display = "block";
-
-            fetch(`/repos?username=${username}`)
-                .then(res => res.json())
-                .then(data => {
-                    const list = document.getElementById("repo-list");
-                    data.repos.forEach(repo => {
-                        list.innerHTML += `
-                            <div class="repo-card">
-                                <div class="repo-name">
-                                    ${repo.name}
-                                    <span class="badge">${repo.private ? "Private" : "Public"}</span>
-                                </div>
-                                <div class="repo-meta">${repo.full_name}</div>
-                                <button class="btn" style="margin-top:10px" onclick="activateRepo('${repo.full_name}')">
-                                    Activate
-                                </button>
-                            </div>
-                        `;
-                    });
-
-                    window.activateRepo = function(repoFullName) {
-                        fetch(`/repos/activate?username=${username}&repo_full_name=${repoFullName}`, {
-                            method: "POST"
-                        })
-                        .then(res => res.json())
-                        .then(data => {
-                            if (data.status === "activated") {
-                                alert(`Activated! Webhook ID: ${data.webhook_id}`);
-                            } else {
-                                alert(`Error: ${data.error}`);
-                            }
-                        });
-                    };
-                });
-        }
-    </script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>frontend</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
 </html>

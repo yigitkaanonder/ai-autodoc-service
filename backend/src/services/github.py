@@ -73,3 +73,12 @@ def get_file_content(access_token: str, repo_full_name: str, file_path: str, ref
     if response.status_code == 200:
         return response.text
     return ""
+
+def delete_webhook(access_token, repo_full_name, webhook_id):
+    url = f"https://api.github.com/repos/{repo_full_name}/hooks/{webhook_id}"
+    headers = {
+        "Authorization": f"token {access_token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    response = requests.delete(url, headers=headers)
+    return response.status_code == 204
