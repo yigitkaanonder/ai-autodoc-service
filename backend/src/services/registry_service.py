@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from models import FunctionRegistry, Documentation
-from services.ast_parser import extract_functions
+from services.code_parser import extract_functions
 
 
 def diff_functions(db: Session, repository_id: int, file_path: str, code: str):
@@ -11,7 +11,7 @@ def diff_functions(db: Session, repository_id: int, file_path: str, code: str):
       - changed: functions whose hash differs from registry
       - deleted: function names in registry but no longer in the file
     """
-    current = extract_functions(code)
+    current = extract_functions(code, file_path)
     current_by_name = {f["name"]: f for f in current}
 
     registered = db.query(FunctionRegistry).filter(
@@ -80,15 +80,15 @@ def mark_functions_deleted(db: Session, repository_id: int, file_path: str, func
         if entry:
             entry.is_deleted = True
     
-    # Mark all documentations for this function
-    docs = db.query(Documentation).filter(
-        Documentation.repository_id == repository_id,
-        Documentation.file_path == file_path,
-        Documentation.function_name == name,
-        Documentation.is_deleted == False
-    ).all()
-    for doc in docs:
-        doc.is_deleted = True
+        # Mark all documentations for this function
+        docs = db.query(Documentation).filter(
+            Documentation.repository_id == repository_id,
+            Documentation.file_path == file_path,
+            Documentation.function_name == name,
+            Documentation.is_deleted == False
+        ).all()
+        for doc in docs:
+            doc.is_deleted = True
 
     db.commit()
 

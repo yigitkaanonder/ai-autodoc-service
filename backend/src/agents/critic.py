@@ -9,34 +9,32 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
 
 def critique_documentation(code: str, documentation: str) -> dict:
-    prompt = f"""You are a documentation quality reviewer. Review the documentation for the given code.
+    prompt = f"""You are a strict documentation quality reviewer. You will receive a single function and its documentation. Score the documentation from 0 to 10.
 
-Score the documentation from 0-10 based on these criteria:
-- Are all functions documented? (2 points)
-- Are all parameters explained with types? (2 points)
-- Are return values specified with types? (2 points)
-- Are edge cases mentioned? (2 points)
-- Is the explanation clear and understandable? (2 points)
+Scoring criteria (2 points each):
+1. Purpose: Does it clearly explain what the function does? (2 points)
+2. Parameters: Are all parameters listed with types and descriptions? (2 points)
+3. Return value: Is the return type and meaning documented? (2 points)
+4. Edge cases: Are error conditions or boundary cases mentioned? (2 points)
+5. Clarity: Is the writing concise, accurate, and well-structured? (2 points)
 
-Formatting penalties (deduct points if violated):
-- Documentation must start directly with content. Deduct 2 points if it has intro phrases like "Here is the documentation" or "I have updated...".
-- Documentation must NOT repeat or rewrite the full source code. Deduct 2 points if the source code is reproduced.
+Formatting penalties (applied after scoring):
+- DEDUCT 2 points if the documentation starts with any phrase addressing the reader such as "Here is", "This is the", "Below is", "I have", "The following", or any text before the ## heading.
+- DEDUCT 2 points if the original source code is reproduced inside the documentation.
 
-
-Respond ONLY with a JSON object, no extra text:
+Respond with ONLY a JSON object, nothing else:
 {{"approved": true, "score": 9, "issues": []}}
 or
 {{"approved": false, "score": 5, "issues": ["issue 1", "issue 2"]}}
 
 Rules:
-- approved is true ONLY if score is 8 or above
-- Be strict, find real issues
-- If there is a formatting violation, mention it explicitly in issues
+- approved = true ONLY if final score >= 8
+- Be strict but fair — do not penalize section headings like "## Parameters" or "## Edge Cases", those are structural, not introductory.
 
-Code:
+Function code:
 {code}
 
-Documentation:
+Documentation to review:
 {documentation}"""
 
     response = requests.post(

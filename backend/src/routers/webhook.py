@@ -7,14 +7,14 @@ from services.user_service import get_user_token
 from pipeline import process_function
 from services.repo_service import get_repository
 from services.registry_service import diff_functions, mark_file_deleted, update_registry, mark_functions_deleted
-from services.ast_parser import extract_functions
+from services.code_parser import extract_functions
 
 router = APIRouter()
 
 # Which file extensions to document
 # TODO: This part is reduced to .py for testing purposes.
 # Will be extended to other languages after cache implementation with tree-sitter.
-SUPPORTED_EXTENSIONS = (".py",) #, ".js", ".ts", ".go", ".java", ".cpp")
+SUPPORTED_EXTENSIONS = (".py", ".js", ".ts", ".go", ".java", ".cpp", ".cc", ".cxx", ".h", ".hpp")
 
 @router.post("/webhook/github")
 async def github_webhook(request: Request, db: Session = Depends(get_db)):
@@ -75,7 +75,7 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
             continue
 
         print(f"[Webhook] New file: {file_path} ({len(content)} chars)")
-        functions = extract_functions(content)
+        functions = extract_functions(content, file_path)
 
         for func in functions:
             process_function(db, repository.id, file_path, func["name"], func["source"], after_sha)
