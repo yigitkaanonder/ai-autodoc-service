@@ -33,3 +33,14 @@ Rules:
 
 Function:
 {code}"""
+    
+    response = requests.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={
+            "model": OLLAMA_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False
+        }
+    )
+
+    return response.json()["message"]["content"]

@@ -1,10 +1,11 @@
 import os
+import asyncio
 
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import RedirectResponse, JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from database import get_db
@@ -14,11 +15,14 @@ from services.github import (
     get_user_repos,
     get_user_info,
     create_webhook,
-    delete_webhook
+    delete_webhook,
+    fetch_repo_branches, 
+    fetch_commits_for_ref
 )
 from services.user_service import save_user_token, get_user_token
 from services.repo_service import save_repository
 from models import Documentation, Repository, FunctionRegistry
+from services.events import event_hub
 
 load_dotenv()
 
@@ -213,3 +217,70 @@ def delete_repo_data(username: str, repo_full_name: str, db: Session = Depends(g
         "deleted_docs": doc_count,
         "deleted_registry": reg_count
     })
+
+@router.get("/repos/{owner}/{name}/commits")
+def get_repo_commit_graph(owner: str, name: str, username: str, db: Session = Depends(get_db)):
+    access_token = get_user_token(db, username)
+    if not access_token:
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
+
+    repo_full_name = f"{owner}/{name}"
+
+    # every branch and its head commit
+    branches = fetch_repo_branches(access_token, repo_full_name)
+    branch_list = [{"name": b["name"], "head_sha": b["commit"]["sha"]} for b in branches]
+
+    # walk each branch head to gather the full directed acyclic graph; dedupe by sha
+    commits_by_sha = {}
+    for branch in branch_list:
+        for raw in fetch_commits_for_ref(access_token, repo_full_name, branch["head_sha"]):
+            sha = raw["sha"]
+            if sha in commits_by_sha:
+                continue
+            author_login = (raw.get("author") or {}).get("login")
+            commit_author = raw["commit"]["author"]
+            parents = [p["sha"] for p in raw.get("parents", [])]
+            commits_by_sha[sha] = {
+                "sha": sha,
+                "short_sha": sha[:7],
+                "message": raw["commit"]["message"].split("\n")[0],
+                "author": author_login or commit_author.get("name", "unknown"),
+                "date": commit_author.get("date"),
+                "parents": parents,
+                "is_merge": len(parents) > 1,
+            }
+
+    # newest first 
+    commits = sorted(commits_by_sha.values(), key=lambda c: c["date"] or "", reverse=True)
+
+    return JSONResponse(content={
+        "repo": repo_full_name,
+        "branches": branch_list,
+        "commits": commits,
+    })
+
+@router.get("/repos/{owner}/{name}/events")
+async def repo_events(owner: str, name: str, request: Request):
+    repo_full_name = f"{owner}/{name}"
+    queue = await event_hub.subscribe(repo_full_name)
+
+    async def event_stream():
+        try:
+            yield ": connected\n\n"  # open the stream
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    # wait for a push, but wake every 5s for a heartbeat
+                    message = await asyncio.wait_for(queue.get(), timeout=5.0)
+                    yield f"event: push\ndata: {message}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+        finally:
+            event_hub.unsubscribe(repo_full_name, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

@@ -8,12 +8,11 @@ from pipeline import process_function
 from services.repo_service import get_repository
 from services.registry_service import diff_functions, mark_file_deleted, update_registry, mark_functions_deleted
 from services.code_parser import extract_functions
+from services.events import event_hub
 
 router = APIRouter()
 
 # Which file extensions to document
-# TODO: This part is reduced to .py for testing purposes.
-# Will be extended to other languages after cache implementation with tree-sitter.
 SUPPORTED_EXTENSIONS = (".py", ".js", ".ts", ".go", ".java", ".cpp", ".cc", ".cxx", ".h", ".hpp")
 
 @router.post("/webhook/github")
@@ -41,6 +40,7 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
     deleted_code_files = [f for f in deleted_files if f.endswith(SUPPORTED_EXTENSIONS)]
 
     print(f"\n[Webhook] Push received: {repo_name} by {pusher}")
+    event_hub.publish(repo_name)
     print(f"[Webhook] Added: {added_code_files}")
     print(f"[Webhook] Modified: {modified_code_files}")
     print(f"[Webhook] Deleted: {deleted_code_files}")

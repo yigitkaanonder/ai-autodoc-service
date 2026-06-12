@@ -82,3 +82,32 @@ def delete_webhook(access_token, repo_full_name, webhook_id):
     }
     response = requests.delete(url, headers=headers)
     return response.status_code == 204
+
+def fetch_repo_branches(access_token: str, repo_full_name: str) -> list:
+    """Fetch all branches of a repository (name + head commit sha)."""
+    response = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}/branches",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github.v3+json"
+        },
+        params={"per_page": 100}
+    )
+    if response.status_code != 200:
+        return []
+    return response.json()
+
+
+def fetch_commits_for_ref(access_token: str, repo_full_name: str, ref: str, per_page: int = 50) -> list:
+    """Fetch the most recent commits reachable from a given ref (branch head)."""
+    response = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}/commits",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github.v3+json"
+        },
+        params={"sha": ref, "per_page": per_page}
+    )
+    if response.status_code != 200:
+        return []
+    return response.json()
