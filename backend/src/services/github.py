@@ -98,16 +98,53 @@ def fetch_repo_branches(access_token: str, repo_full_name: str) -> list:
     return response.json()
 
 
-def fetch_commits_for_ref(access_token: str, repo_full_name: str, ref: str, per_page: int = 50) -> list:
-    """Fetch the most recent commits reachable from a given ref (branch head)."""
+def fetch_commits_for_ref(access_token: str, repo_full_name: str, ref: str, per_page: int = 100, max_pages: int = 50) -> list:
+    """Fetch ALL commits reachable from a ref, paginating through pages."""
+    all_commits = []
+    page = 1
+    while page <= max_pages:
+        response = requests.get(
+            f"https://api.github.com/repos/{repo_full_name}/commits",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github.v3+json"
+            },
+            params={"sha": ref, "per_page": per_page, "page": page}
+        )
+        if response.status_code != 200:
+            break
+        batch = response.json()
+        if not batch:
+            break
+        all_commits.extend(batch)
+        if len(batch) < per_page:
+            break   # last page
+        page += 1
+    return all_commits
+
+def fetch_commit_files(access_token: str, repo_full_name: str, sha: str) -> list:
+    """Return the files changed in a single commit (each with a 'status')."""
     response = requests.get(
-        f"https://api.github.com/repos/{repo_full_name}/commits",
+        f"https://api.github.com/repos/{repo_full_name}/commits/{sha}",
         headers={
             "Authorization": f"Bearer {access_token}",
             "Accept": "application/vnd.github.v3+json"
-        },
-        params={"sha": ref, "per_page": per_page}
+        }
     )
     if response.status_code != 200:
         return []
-    return response.json()
+    return response.json().get("files", [])
+
+
+def fetch_default_branch(access_token: str, repo_full_name: str) -> str:
+    """Return the repository's default branch name (e.g. 'main')."""
+    response = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+    )
+    if response.status_code != 200:
+        return None
+    return response.json().get("default_branch")

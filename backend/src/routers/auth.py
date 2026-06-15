@@ -100,6 +100,12 @@ def activate_repo(username: str, repo_full_name: str, db: Session = Depends(get_
 
     if "id" in result:
         save_repository(db, username, repo_full_name, result["id"])
+        repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
+
+        # document history: root -> HEAD on first activation, or fill the gap on reactivation
+        from services.backfill_service import backfill_repository
+        backfill_repository(db, access_token, repo_full_name, repo)
+
         return JSONResponse(content={
             "status": "activated",
             "repo": repo_full_name,
@@ -118,16 +124,17 @@ def get_repo_docs(owner: str, name: str, db: Session = Depends(get_db)):
     if not repo:
         return JSONResponse(status_code=404, content={"error": "Repository not found"})
 
-    # Get only the latest doc per function (max id = newest)
+   # latest event (row) per function, across ALL rows including tombstones
     latest_ids = db.query(
         func.max(Documentation.id).label('max_id')
     ).filter(
-        Documentation.repository_id == repo.id,
-        Documentation.is_deleted == False
+        Documentation.repository_id == repo.id
     ).group_by(Documentation.function_name).subquery()
 
+    # keep only functions whose latest event is NOT a deletion
     docs = db.query(Documentation).filter(
-        Documentation.id.in_(db.query(latest_ids.c.max_id))
+        Documentation.id.in_(db.query(latest_ids.c.max_id)),
+        Documentation.is_deleted == False
     ).order_by(Documentation.file_path, Documentation.function_name).all()
     
     return JSONResponse(content={
@@ -157,7 +164,7 @@ def get_function_history(owner: str, name: str, function_name: str, db: Session 
     docs = db.query(Documentation).filter(
         Documentation.repository_id == repo.id,
         Documentation.function_name == function_name
-    ).order_by(Documentation.created_at.desc()).all()
+    ).order_by(Documentation.id.desc()).all()
 
     return JSONResponse(content={
         "repo": repo_full_name,
@@ -209,6 +216,7 @@ def delete_repo_data(username: str, repo_full_name: str, db: Session = Depends(g
 
     doc_count = db.query(Documentation).filter(Documentation.repository_id == repo.id).delete()
     reg_count = db.query(FunctionRegistry).filter(FunctionRegistry.repository_id == repo.id).delete()
+    repo.documented_head_sha = None
     db.commit()
 
     return JSONResponse(content={
@@ -253,10 +261,12 @@ def get_repo_commit_graph(owner: str, name: str, username: str, db: Session = De
     # newest first 
     commits = sorted(commits_by_sha.values(), key=lambda c: c["date"] or "", reverse=True)
 
+    repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
     return JSONResponse(content={
         "repo": repo_full_name,
         "branches": branch_list,
         "commits": commits,
+        "documented_head_sha": repo.documented_head_sha if repo else None,
     })
 
 @router.get("/repos/{owner}/{name}/events")
@@ -284,3 +294,118 @@ async def repo_events(owner: str, name: str, request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+@router.post("/repos/{owner}/{name}/backfill")
+def backfill_repo(owner: str, name: str, username: str, db: Session = Depends(get_db)):
+    access_token = get_user_token(db, username)
+    if not access_token:
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
+
+    repo_full_name = f"{owner}/{name}"
+    repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
+    if not repo:
+        return JSONResponse(status_code=404, content={"error": "Repository not found"})
+
+    db.query(Documentation).filter(Documentation.repository_id == repo.id).delete()
+    db.query(FunctionRegistry).filter(FunctionRegistry.repository_id == repo.id).delete()
+    repo.documented_head_sha = None
+    db.commit()
+
+    from services.backfill_service import backfill_repository
+    result = backfill_repository(db, access_token, repo_full_name, repo)
+
+    return JSONResponse(content={"repo": repo_full_name, **result})
+
+
+@router.get("/repos/{owner}/{name}/commits/{sha}/changes")
+def get_commit_changes(owner: str, name: str, sha: str, db: Session = Depends(get_db)):
+    repo_full_name = f"{owner}/{name}"
+    repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
+    if not repo:
+        return JSONResponse(status_code=404, content={"error": "Repository not found"})
+
+    # all documentation events recorded at this commit
+    rows = db.query(Documentation).filter(
+        Documentation.repository_id == repo.id,
+        Documentation.commit_sha == sha
+    ).order_by(Documentation.id).all()
+
+    added, changed, deleted = [], [], []
+    for row in rows:
+        if row.is_deleted:
+            deleted.append({"function_name": row.function_name, "file_path": row.file_path})
+            continue
+
+        # added vs changed: look at the event immediately before this one
+        prev = db.query(Documentation).filter(
+            Documentation.repository_id == repo.id,
+            Documentation.function_name == row.function_name,
+            Documentation.file_path == row.file_path,
+            Documentation.id < row.id
+        ).order_by(Documentation.id.desc()).first()
+
+        entry = {
+            "id": row.id,
+            "function_name": row.function_name,
+            "file_path": row.file_path,
+            "content": row.content,
+            "score": row.score,
+        }
+        if prev is None or prev.is_deleted:
+            added.append(entry)      # first time, or re-added after a deletion
+        else:
+            changed.append(entry)    # had a live doc immediately before
+
+    return JSONResponse(content={
+        "repo": repo_full_name,
+        "commit_sha": sha,
+        "added": added,
+        "changed": changed,
+        "deleted": deleted,
+    })
+
+
+@router.get("/repos/{owner}/{name}/commits/{sha}/snapshot")
+def get_commit_snapshot(owner: str, name: str, sha: str, username: str, db: Session = Depends(get_db)):
+    access_token = get_user_token(db, username)
+    if not access_token:
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
+
+    repo_full_name = f"{owner}/{name}"
+    repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
+    if not repo:
+        return JSONResponse(status_code=404, content={"error": "Repository not found"})
+
+    # this commit + all its ancestors
+    ancestors = fetch_commits_for_ref(access_token, repo_full_name, sha, per_page=100)
+    ancestor_shas = [c["sha"] for c in ancestors] or [sha]
+
+    # latest documentation event per function, restricted to those commits
+    latest_ids = db.query(
+        func.max(Documentation.id).label('max_id')
+    ).filter(
+        Documentation.repository_id == repo.id,
+        Documentation.commit_sha.in_(ancestor_shas)
+    ).group_by(Documentation.function_name).subquery()
+
+    # keep only functions whose latest event in this range is NOT a deletion
+    docs = db.query(Documentation).filter(
+        Documentation.id.in_(db.query(latest_ids.c.max_id)),
+        Documentation.is_deleted == False
+    ).order_by(Documentation.file_path, Documentation.function_name).all()
+
+    return JSONResponse(content={
+        "repo": repo_full_name,
+        "commit_sha": sha,
+        "docs": [
+            {
+                "id": d.id,
+                "file_path": d.file_path,
+                "function_name": d.function_name,
+                "content": d.content,
+                "score": d.score,
+                "commit_sha": d.commit_sha,
+            }
+            for d in docs
+        ]
+    })

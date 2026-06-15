@@ -45,6 +45,13 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
     print(f"[Webhook] Modified: {modified_code_files}")
     print(f"[Webhook] Deleted: {deleted_code_files}")
 
+    # Every processed push extends coverage up to its HEAD commit, even
+    # pushes that changed no code (docs are still current there).
+    repository = get_repository(db, repo_name)
+    if repository and after_sha:
+        repository.documented_head_sha = after_sha
+        db.commit()
+
     if not added_code_files and not modified_code_files and not deleted_code_files:
         return JSONResponse(content={"status": "no_code_files"})
     
@@ -65,7 +72,7 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
     
     # --- Handle deleted files ---
     for file_path in deleted_code_files:
-        mark_file_deleted(db, repository.id, file_path)
+        mark_file_deleted(db, repository.id, file_path, after_sha)
         print(f"[Webhook] File deleted: {file_path}")
 
     # --- Handle added files (all functions are new, skip diff) ---
@@ -109,7 +116,7 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
             process_function(db, repository.id, file_path, func["name"], func["source"], after_sha)
 
         if deleted:
-            mark_functions_deleted(db, repository.id, file_path, deleted)
+            mark_functions_deleted(db, repository.id, file_path, deleted, after_sha)
 
         update_registry(db, repository.id, file_path, new + changed)
         processed.append(file_path)

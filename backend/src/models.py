@@ -16,6 +16,7 @@ class Repository(Base):
 
     user = relationship("User", back_populates="repositories")
     documentations = relationship("Documentation", back_populates="repository")
+    documented_head_sha = Column(String, nullable=True)  # high-water mark of documentation coverage
 
 
 class Documentation(Base):

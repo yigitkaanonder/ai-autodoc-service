@@ -66,7 +66,7 @@ def update_registry(db: Session, repository_id: int, file_path: str, functions: 
     db.commit()
 
 
-def mark_functions_deleted(db: Session, repository_id: int, file_path: str, function_names: list):
+def mark_functions_deleted(db: Session, repository_id: int, file_path: str, function_names: list, commit_sha: str = None):
     """
     Soft-delete functions that no longer exist.
     Also marks their documentation entries as deleted.
@@ -79,23 +79,24 @@ def mark_functions_deleted(db: Session, repository_id: int, file_path: str, func
         ).first()
         if entry:
             entry.is_deleted = True
-    
-        # Mark all documentations for this function
-        docs = db.query(Documentation).filter(
-            Documentation.repository_id == repository_id,
-            Documentation.file_path == file_path,
-            Documentation.function_name == name,
-            Documentation.is_deleted == False
-        ).all()
-        for doc in docs:
-            doc.is_deleted = True
+
+        # append a deletion event (tombstone)
+        tombstone = Documentation(
+            repository_id=repository_id,
+            file_path=file_path,
+            function_name=name,
+            content=None,
+            score=None,
+            commit_sha=commit_sha,
+            is_deleted=True,
+        )
+        db.add(tombstone)
 
     db.commit()
 
-def mark_file_deleted(db: Session, repository_id: int, file_path: str):
+def mark_file_deleted(db: Session, repository_id: int, file_path: str, commit_sha: str = None):
     """
     Soft-delete all functions in a deleted file.
-    Also marks all documentations for that file as deleted.
     """
 
     entries = db.query(FunctionRegistry).filter(
@@ -106,4 +107,4 @@ def mark_file_deleted(db: Session, repository_id: int, file_path: str):
     function_names = [entry.function_name for entry in entries]
 
     if function_names:
-        mark_functions_deleted(db, repository_id, file_path, function_names)
+        mark_functions_deleted(db, repository_id, file_path, function_names, commit_sha)
