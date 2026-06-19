@@ -9,6 +9,7 @@ from services.repo_service import get_repository
 from services.registry_service import diff_functions, mark_file_deleted, update_registry, mark_functions_deleted
 from services.code_parser import extract_functions
 from services.events import event_hub
+from services.doc_service import save_documentation_to_db, get_latest_documentation
 
 router = APIRouter()
 
@@ -110,10 +111,13 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
         for func in new:
             process_function(db, repository.id, file_path, func["name"], func["source"], after_sha)
 
-        # Changed functions: for now same as new, later will use router agent
-        # TODO: implement router agent to only update changed parts of documentation
+        # Changed functions: ask critic #1. keep or generate.
         for func in changed:
-            process_function(db, repository.id, file_path, func["name"], func["source"], after_sha)
+            existing = get_latest_documentation(db, repository.id, file_path, func["name"])
+            process_function(
+                db, repository.id, file_path, func["name"], func["source"], after_sha,
+                mode="modified", existing_documentation=existing.content if existing else "",
+            )
 
         if deleted:
             mark_functions_deleted(db, repository.id, file_path, deleted, after_sha)

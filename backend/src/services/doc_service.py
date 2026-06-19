@@ -22,3 +22,16 @@ def save_documentation_to_db(
     db.commit()
     db.refresh(doc)
     return doc
+
+def get_latest_documentation(db, repository_id, file_path, function_name):
+    return (
+        db.query(Documentation)
+        .filter(
+            Documentation.repository_id == repository_id,
+            Documentation.file_path == file_path,
+            Documentation.function_name == function_name,
+            Documentation.is_deleted == False,
+        )
+        .order_by(Documentation.id.desc())
+        .first()
+    )

@@ -12,6 +12,7 @@ from services.registry_service import (
     mark_file_deleted,
 )
 from pipeline import process_function
+from services.doc_service import save_documentation_to_db, get_latest_documentation
 
 # Same set the webhook uses
 SUPPORTED_EXTENSIONS = (".py", ".js", ".ts", ".go", ".java", ".cpp", ".cc", ".cxx", ".h", ".hpp")
@@ -89,13 +90,18 @@ def backfill_repository(db, access_token, repo_full_name, repository):
                 continue
             new, changed, deleted = diff_functions(db, repository.id, file_path, content)
 
+            # added function
             for func in new:
                 process_function(db, repository.id, file_path, func["name"], func["source"], sha)
 
-            # NOTE: "changed" uses the from-scratch path for now. When the
-            # second AI path (update existing doc) is added, branch it here.
+            # modified function
             for func in changed:
-                process_function(db, repository.id, file_path, func["name"], func["source"], sha)
+                existing = get_latest_documentation(db, repository.id, file_path, func["name"])
+                process_function(
+                    db, repository.id, file_path, func["name"], func["source"], sha,
+                    mode="modified", existing_documentation=existing.content if existing else "",
+                )
+
 
             if deleted:
                 # commit-tied tombstones come in Adım B; for now this soft-deletes
