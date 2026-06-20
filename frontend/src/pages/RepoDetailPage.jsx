@@ -83,6 +83,7 @@ function RepoDetailPage() {
   const [live, setLive] = useState(false)   // SSE connected?
   const [flash, setFlash] = useState(false)  // brief highlight on update
   const flashTimer = useRef(null)
+  const snapColsRef = useRef(null)
 
   // changes for the selected commit
   const [changes, setChanges] = useState(null)
@@ -93,6 +94,8 @@ function RepoDetailPage() {
   const [snapshotOpen, setSnapshotOpen] = useState(false)
   const [snapshot, setSnapshot] = useState(null)
   const [snapshotLoading, setSnapshotLoading] = useState(false)
+  const [snapFile, setSnapFile] = useState(null)
+  const [snapFilesWidth, setSnapFilesWidth] = useState(240)
 
   // ---- fetch the commit graph from the backend ----
   const fetchGraph = useCallback(() => {
@@ -185,6 +188,23 @@ function RepoDetailPage() {
     return set
   }, [documentedHeadSha, commits])
 
+  const snapshotFiles = useMemo(() => {
+    if (!snapshot?.docs) return []
+    const byFile = {}
+    for (const d of snapshot.docs) {
+      (byFile[d.file_path] = byFile[d.file_path] || []).push(d)
+    }
+    return Object.entries(byFile)
+      .map(([file_path, docs]) => ({ file_path, docs }))
+      .sort((a, b) => a.file_path.localeCompare(b.file_path))
+  }, [snapshot])
+
+  useEffect(() => {
+    if (snapshotFiles.length && !snapFile) setSnapFile(snapshotFiles[0].file_path)
+  }, [snapshotFiles, snapFile])
+
+  const activeSnapFile = snapshotFiles.find((f) => f.file_path === snapFile) || null
+
   const selected = commits.find((c) => c.sha === selectedSha) || null
   const selectedDocumented = selected ? documentedSet.has(selected.sha) : false
 
@@ -193,12 +213,33 @@ function RepoDetailPage() {
     const username = localStorage.getItem('username')
     setSnapshotOpen(true)
     setSnapshot(null)
+    setSnapFile(null)
     setSnapshotLoading(true)
     fetch(`/api/repos/${owner}/${name}/commits/${selectedSha}/snapshot?username=${username}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => setSnapshot(data))
       .catch(() => setSnapshot(null))
       .finally(() => setSnapshotLoading(false))
+  }
+
+  const startSnapResize = (e) => {
+    e.preventDefault()
+    const onMove = (ev) => {
+      const rect = snapColsRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const w = ev.clientX - rect.left
+      setSnapFilesWidth(Math.min(Math.max(w, 140), 480))
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+    }
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
   }
 
   const x = (col) => GUTTER + col * COL_WIDTH
@@ -396,20 +437,45 @@ function RepoDetailPage() {
                 <button className="rg-modal-close" onClick={() => setSnapshotOpen(false)}>×</button>
               </div>
               <div className="rg-modal-body">
-                {snapshotLoading && <div className="rg-changes-empty">Loading snapshot…</div>}
-                {!snapshotLoading && snapshot && snapshot.docs.length === 0 &&
-                  <div className="rg-changes-empty">No documentation at this commit.</div>}
-                {!snapshotLoading && snapshot && snapshot.docs.map((doc) => (
-                  <div key={doc.id} className="rg-doc-card">
-                    <div className="rg-doc-card-head">
-                      <span className="rg-change-fn">{doc.function_name}</span>
-                      <span className="rg-change-file">{doc.file_path}</span>
+                {snapshotLoading && <div className="rg-snap-msg">Loading snapshot…</div>}
+                {!snapshotLoading && snapshotFiles.length === 0 &&
+                  <div className="rg-snap-msg">No documentation at this commit.</div>}
+                {!snapshotLoading && snapshotFiles.length > 0 && (
+                  <div className="rg-snap-cols" ref={snapColsRef}
+                       style={{ '--snap-files-w': `${snapFilesWidth}px` }}>
+                    <div className="rg-snap-files">
+                      {snapshotFiles.map((f) => (
+                        <button
+                          key={f.file_path}
+                          title={f.file_path}
+                          className={`rg-snap-file ${f.file_path === snapFile ? 'active' : ''}`}
+                          onClick={() => setSnapFile(f.file_path)}
+                        >
+                          <span className="rg-snap-file-name">{f.file_path}</span>
+                          <span className="rg-snap-file-count">{f.docs.length}</span>
+                        </button>
+                      ))}
                     </div>
-                    <div className="rg-doc-content">
-                      <ReactMarkdown>{doc.content || ''}</ReactMarkdown>
+                    <div className="rg-snap-resizer" onMouseDown={startSnapResize} />
+                    <div className="rg-snap-content">
+                      {activeSnapFile
+                        ? activeSnapFile.docs.map((doc) => (
+                            <div key={doc.id} className="rg-doc-card">
+                              <div className="rg-doc-card-head">
+                                <span className="rg-change-fn">{doc.function_name}</span>
+                                {doc.score != null && (
+                                  <span className="rg-snap-score">{doc.score}/10</span>
+                                )}
+                              </div>
+                              <div className="rg-doc-content">
+                                <ReactMarkdown>{doc.content || ''}</ReactMarkdown>
+                              </div>
+                            </div>
+                          ))
+                        : <div className="rg-snap-msg">Select a file to view its documentation.</div>}
                     </div>
                   </div>
-                ))}
+                )}
               </div>
             </div>
           </div>
