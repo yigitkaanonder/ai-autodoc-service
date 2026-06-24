@@ -11,8 +11,9 @@ from services.registry_service import (
     mark_functions_deleted,
     mark_file_deleted,
 )
-from pipeline import process_function
-from services.doc_service import save_documentation_to_db, get_latest_documentation
+from services.doc_service import get_latest_documentation
+from services.changeset_service import ChangedFunction, run_repo_changeset
+from database import SessionLocal
 
 # Same set the webhook uses
 SUPPORTED_EXTENSIONS = (".py", ".js", ".ts", ".go", ".java", ".cpp", ".cc", ".cxx", ".h", ".hpp")
@@ -73,41 +74,50 @@ def backfill_repository(db, access_token, repo_full_name, repository):
 
         print(f"[Backfill] {sha[:7]} — added:{len(added)} modified:{len(modified)} removed:{len(removed)}")
 
+        changeset = [] 
+        registry_updates = {}       # file_path -> functions to register
+
         # added files: every function is new
         for file_path in added:
             content = get_file_content(access_token, repo_full_name, file_path, sha)
             if not content:
                 continue
             functions = extract_functions(content, file_path)
+            registry_updates[file_path] = functions
             for func in functions:
-                process_function(db, repository.id, file_path, func["name"], func["source"], sha)
-            update_registry(db, repository.id, file_path, functions)
+                changeset.append(ChangedFunction(func=func, mode="added"))
 
         # modified files: diff against the registry (state of the previous commit)
         for file_path in modified:
             content = get_file_content(access_token, repo_full_name, file_path, sha)
             if not content:
                 continue
+            
+            by_name = {f["name"]: f for f in extract_functions(content, file_path)}
             new, changed, deleted = diff_functions(db, repository.id, file_path, content)
-
-            # added function
+ 
             for func in new:
-                process_function(db, repository.id, file_path, func["name"], func["source"], sha)
+                changeset.append(ChangedFunction(func=by_name.get(func["name"], func), mode="added"))
 
-            # modified function
             for func in changed:
                 existing = get_latest_documentation(db, repository.id, file_path, func["name"])
-                process_function(
-                    db, repository.id, file_path, func["name"], func["source"], sha,
-                    mode="modified", existing_documentation=existing.content if existing else "",
-                )
-
-
+                changeset.append(ChangedFunction(
+                    func=by_name.get(func["name"], func),
+                    mode="modified",
+                    existing_documentation=existing.content if existing else "",
+                ))
+ 
             if deleted:
-                # commit-tied tombstones come in Adım B; for now this soft-deletes
                 mark_functions_deleted(db, repository.id, file_path, deleted, sha)
+ 
+            registry_updates[file_path] = new + changed
 
-            update_registry(db, repository.id, file_path, new + changed)
+        if changeset:
+            run_repo_changeset(db, SessionLocal, repository.id, sha, changeset)
+
+        # advance the registry per file AFTER documenting
+        for file_path, functions in registry_updates.items():
+            update_registry(db, repository.id, file_path, functions)
 
         # removed files: soft-delete all their functions
         for file_path in removed:
@@ -116,6 +126,7 @@ def backfill_repository(db, access_token, repo_full_name, repository):
         # advance the high-water mark commit by commit
         repository.documented_head_sha = sha
         db.commit()
-
+ 
     print(f"[Backfill] {repo_full_name}: done ({len(to_process)} commits)")
     return {"status": "backfilled", "commits": len(to_process)}
+ 

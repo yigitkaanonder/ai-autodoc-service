@@ -9,6 +9,7 @@ class DocumentationState(TypedDict):
     function_name: str 
     mode: str
     existing_documentation: str
+    context: str
     documentation: str
     decision: str #kept decision as string to add patch as a future feature (only update the changed part)
                   #now we only have skip and redo.
@@ -19,10 +20,10 @@ class DocumentationState(TypedDict):
 
 # Node 1: Critic #1
 def gate_node(state: DocumentationState) -> DocumentationState:
-    print(f"\n[Gate] Checking if existing doc still valid for {state['function_name']}...")
+    print(f"\n[{state['function_name']}] Gate: checking if existing doc still valid...")
     result = gate_documentation(state["code"], state["existing_documentation"])
     decision = result.get("decision", "regenerate")
-    print(f"[Gate] Decision: {decision} — {result.get('reason', '')}")
+    print(f"[{state['function_name']}] Gate decision: {decision} — {result.get('reason', '')}")
     out = {**state, "decision": decision}
     if decision == "keep":
         out["documentation"] = state["existing_documentation"]
@@ -38,14 +39,14 @@ def after_gate(state: DocumentationState) -> str:
 
 # Node 2: Generator
 def generator_node(state: DocumentationState) -> DocumentationState:
-    print(f"\n[Generator] Iteration {state['iteration'] + 1}...")
+    print(f"\n[{state['function_name']}] Generator: iteration {state['iteration'] + 1}")
     
     # If there are issues from critic, add them to the prompt
     extra = ""
     if state["issues"]:
         extra = f"\n\nPrevious documentation had these issues, fix them:\n" + "\n".join(state["issues"])
     
-    doc = generate_documentation(state["code"] + extra)
+    doc = generate_documentation(state["code"] + extra, context=state.get("context", ""))
     
     return {
         **state,
@@ -55,15 +56,15 @@ def generator_node(state: DocumentationState) -> DocumentationState:
 
 # Node 3: Critic #2
 def critic_node(state: DocumentationState) -> DocumentationState:
-    print(f"[Critic] Reviewing documentation...")
+    print(f"[{state['function_name']}] Critic: reviewing...")
     
     result = critique_documentation(state["code"], state["documentation"])
     
-    print(f"[Critic] Score: {result.get('score', 'N/A')}/10")
+    print(f"[{state['function_name']}] Critic: score {result.get('score', 'N/A')}/10")
 
-    print(f"[Critic] Approved: {result['approved']}")
+    print(f"[{state['function_name']}] Critic: approved={result['approved']}")
     if not result["approved"]:
-        print(f"[Critic] Issues: {result['issues']}")
+        print(f"[{state['function_name']}] Critic issues: {result['issues']}")
     
     return {
         **state,
@@ -77,7 +78,7 @@ def should_continue(state: DocumentationState) -> str:
     if state["approved"]:
         return "end"
     if state["iteration"] >= 3: #max 3 iterations.
-        print("[Graph] Max iterations reached, saving anyway.")
+        print(f"[{state['function_name']}] Graph: max iterations reached, saving anyway")
         return "end"
     return "generate"
 

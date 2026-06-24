@@ -21,7 +21,6 @@ from routers.repos import router as repos_router
 from routers.webhook import router as webhook_router
 
 app = FastAPI(title="AI Autodoc Service")
-app.mount("/static", StaticFiles(directory="../frontend"), name="static")
 
 # Register routers
 app.include_router(auth_router)
@@ -30,10 +29,6 @@ app.include_router(docs_router)
 app.include_router(events_router)
 app.include_router(repos_router)
 app.include_router(webhook_router)
-
-@app.get("/")
-def root():
-    return FileResponse("../frontend/index.html")
 
 
 if __name__ == "__main__":

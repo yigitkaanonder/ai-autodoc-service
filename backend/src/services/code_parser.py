@@ -51,6 +51,23 @@ FUNCTION_NODE_TYPES = {
 }
 
 
+#   python      call                -> function: identifier | attribute(.attribute)
+#   js/ts       call_expression     -> function: identifier | member_expression(.property)
+#   go          call_expression     -> function: identifier | selector_expression(.field)
+#   java        method_invocation   -> name: identifier
+#               object_creation_expression (new Foo()) -> type: type_identifier
+#   cpp         call_expression     -> function: identifier | field_expression(.field)
+#                                                  | qualified_identifier(.name)
+CALL_NODE_TYPES = {
+    "python": {"call"},
+    "javascript": {"call_expression"},
+    "typescript": {"call_expression"},
+    "go": {"call_expression"},
+    "java": {"method_invocation", "object_creation_expression"},
+    "cpp": {"call_expression"},
+}
+
+
 def get_language(file_path: str):
     """Determine tree-sitter language name from file extension."""
     ext = os.path.splitext(file_path)[1].lower()
@@ -131,6 +148,94 @@ def _extract_cpp_function_name(node):
     return None
 
 
+def _get_callee_name(node, language):
+    """
+    Given a call node, return the simple name of the function being called,
+    or None if it can't be determined (dynamic/computed callee, etc.).
+ 
+    "Simple name" means the final identifier only: `Foo::bar()` -> "bar",
+    `obj.method()` -> "method", `mod.sub.fn()` -> "fn". Resolution in
+    call_graph.py normalizes definition names the same way, so a call and its
+    definition line up regardless of qualifier.
+    """
+    node_type = node.type
+ 
+    # Java is the odd one out: calls expose the method name on a 'name' field,
+    # and `new Foo()` is a separate node whose 'type' field is the class.
+    if language == "java":
+        if node_type == "method_invocation":
+            name_node = node.child_by_field_name("name")
+            return name_node.text.decode("utf-8") if name_node else None
+        if node_type == "object_creation_expression":  # new Foo(...)
+            type_node = node.child_by_field_name("type")
+            return type_node.text.decode("utf-8") if type_node else None
+        return None
+ 
+    # Everything else nests the callee under a 'function' field.
+    func = node.child_by_field_name("function")
+    if func is None:
+        return None
+    ftype = func.type
+ 
+    if ftype == "identifier":                       # foo()
+        return func.text.decode("utf-8")
+ 
+    if language == "python" and ftype == "attribute":          # obj.method()
+        attr = func.child_by_field_name("attribute")
+        return attr.text.decode("utf-8") if attr else None
+ 
+    if language in ("javascript", "typescript") and ftype == "member_expression":  # obj.method()
+        prop = func.child_by_field_name("property")
+        return prop.text.decode("utf-8") if prop else None
+ 
+    if language == "go" and ftype == "selector_expression":    # pkg.Fn() / recv.Method()
+        field = func.child_by_field_name("field")
+        return field.text.decode("utf-8") if field else None
+ 
+    if language == "cpp" and ftype == "field_expression":      # obj.method()
+        field = func.child_by_field_name("field")
+        return field.text.decode("utf-8") if field else None
+ 
+    if language == "cpp" and ftype == "qualified_identifier":  # Foo::bar()
+        name_node = func.child_by_field_name("name")
+        return name_node.text.decode("utf-8") if name_node else None
+ 
+    return None
+ 
+ 
+def _collect_callees(fn_node, language):
+    """
+    Names of functions called directly within fn_node.
+ 
+    Crucially, we do NOT descend into nested function *definitions*: a call
+    inside a nested `def`/arrow/method belongs to that nested function (which is
+    extracted as its own unit), not to its enclosing function. Lambdas are not
+    function definitions, so calls inside an inline lambda are attributed to the
+    enclosing function (intentional — the lambda is part of its body).
+ 
+    Returns a de-duplicated, order-preserving list of simple callee names.
+    """
+    func_types = set(FUNCTION_NODE_TYPES.get(language, []))
+    call_types = CALL_NODE_TYPES.get(language, set())
+    seen = set()
+    ordered = []
+ 
+    def recurse(node, is_root):
+        # Stop at a nested function-definition boundary (but never at the root).
+        if not is_root and node.type in func_types:
+            return
+        if node.type in call_types:
+            name = _get_callee_name(node, language)
+            if name and name not in seen:
+                seen.add(name)
+                ordered.append(name)
+        for child in node.children:
+            recurse(child, False)
+ 
+    recurse(fn_node, True)
+    return ordered
+
+
 def _walk_tree(node):
     """Recursively yield all nodes in the syntax tree (depth-first)."""
     yield node
@@ -147,8 +252,8 @@ def extract_functions(code: str, file_path: str) -> list:
         file_path: File path (used to determine language from extension).
 
     Returns:
-        List of dicts: [{"name": str, "source": str, "hash": str}, ...]
-        Same format as the old ast_parser so callers don't need to change their logic.
+        List of dicts: [{"name": str, "source": str, "hash": str, "file_path": str, 
+                            "language": str, "callees": list, "has_error": bool}, ...]
     """
     language = get_language(file_path)
     if not language:
@@ -176,6 +281,10 @@ def extract_functions(code: str, file_path: str) -> list:
             "name": name,
             "source": source,
             "hash": content_hash,
+            "file_path": file_path,
+            "language": language,
+            "callees": _collect_callees(node, language),
+            "has_error": node.has_error,
         })
 
     return functions
