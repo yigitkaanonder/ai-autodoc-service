@@ -18,6 +18,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Iterable, NamedTuple, Optional
 
+# Use bitmask dp solution if the length of the SCC is <= SCC_DP_LIMIT. Otherwise, use greedy solution (not the most optimal).
+SCC_DP_LIMIT = 10
 
 class FuncKey(NamedTuple):
     file_path: str
@@ -181,6 +183,48 @@ class Condensation:
         if len(order) != len(self.components):
             raise ValueError("condensation is not acyclic — SCC bug")
         return order
+    
+
+    def resolve_scc_order(
+        self,
+        comp_id: int,
+        call_graph: CallGraph,
+        loc: dict[FuncKey, int],
+        ) -> list[FuncKey]:
+        """
+        Finds an optimal order of functions to document in a SCC.
+
+        Inside a SCC there is no valid topological order so I will remove some edges
+        to make the SCC a DAG, solving minimum feedback arc set. Then use topological
+        sort to order the functions. 
+
+        In that order already documented function's documentations will be used to 
+        generate the documentation and, the codes of the functions will be used for the
+        functions that are not documented yet. (Deleting an edge means that the code of
+        the function will be used instead of the documentation.)
+
+        The length of the function will be used as a weight for the edges, since they
+        make the context sizes bigger.
+        """
+
+        members = self.components[comp_id]
+        if len(members) <= 1:
+            return list(members)
+
+        member_set = set(members)
+        deps_in_scc: dict[FuncKey, set[FuncKey]] = {
+            f: {
+                g
+                for g in call_graph.deps.get(f, ())
+                if g in member_set and g != f
+            }
+            for f in members
+        }
+
+        if len(members) <= SCC_DP_LIMIT:
+            return _scc_order_dp(members, deps_in_scc, loc)
+        return _scc_order_greedy(members, deps_in_scc, loc)
+
  
  
 def _tarjan_scc(nodes: list[FuncKey],
@@ -267,3 +311,119 @@ def condense(call_graph: CallGraph) -> Condensation:
             cond.dependents[cv].add(cu)
  
     return cond
+
+
+def build_loc_map(changeset_functions: Iterable[dict]) -> dict[FuncKey, int]:
+    """Build FuncKey -> int (line count) map for resolve_scc_order (loc)."""
+    loc: dict[FuncKey, int] = {}
+    for f in changeset_functions:
+        key = FuncKey(f["file_path"], f["name"])
+        source = f.get("source") or ""
+        loc[key] = len(source.splitlines())
+    return loc
+
+
+def _scc_cost(
+    order: Iterable[FuncKey],
+    deps_in_scc: dict[FuncKey, set[FuncKey]],
+    loc: dict[FuncKey, int],
+) -> int:
+    """Total source-inlining cost of one ordering."""
+    pos = {key: i for i, key in enumerate(order)}
+    total = 0
+    for f, deps in deps_in_scc.items():
+        pf = pos[f]
+        for g in deps:
+            if pos[g] > pf:
+                total += loc.get(g, 0)
+    return total
+
+
+def _scc_order_dp(
+    members: tuple[FuncKey, ...],
+    deps_in_scc: dict[FuncKey, set[FuncKey]],
+    loc: dict[FuncKey, int],
+) -> list[FuncKey]:
+    """
+    Calculates the exact minimum cost with bitmask dp. 
+
+    State ``dp[mask]`` holds the minimum source-inlining cost to place exactly the
+    nodes indicated by ``mask``.  Transition: placing node *v* (not yet in mask)
+    at position ``popcount(mask)`` adds ``loc[g]`` for every intra-SCC dependency
+    *g* of *v* that is NOT yet in mask (g will come later → source is inlined).
+
+    Complexity: O(2^n · n)
+
+    Deterministic tie-break: candidates are tried in sorted FuncKey order and the
+    table is updated only on strict improvement, so the lexicographically smallest
+    path wins among equal-cost alternatives.
+    """
+    nodes = sorted(members)
+    n = len(nodes)
+    idx = {fk: i for i, fk in enumerate(nodes)}
+
+    dep_bits: list[list[tuple[int, int]]] = []
+    for v in nodes:
+        dep_bits.append([
+            (idx[g], loc.get(g, 0))
+            for g in sorted(deps_in_scc.get(v, ()))
+        ])
+
+    full = (1 << n) - 1
+    INF = float("inf")
+    dp = [INF] * (full + 1)
+    parent = [-1] * (full + 1)   # which node index was placed last
+    dp[0] = 0
+
+    for mask in range(full):
+        if dp[mask] == INF:
+            continue
+        base_cost = dp[mask]
+        for vi in range(n):
+            bit = 1 << vi
+            if mask & bit:
+                continue
+            # Cost of placing nodes[vi] now: charge loc[g] for every dep g
+            # of vi that hasn't been placed yet (not in mask).
+            added = 0
+            for gi, g_loc in dep_bits[vi]:
+                if not (mask & (1 << gi)):
+                    added += g_loc
+            total = base_cost + added
+            new_mask = mask | bit
+            if total < dp[new_mask]:
+                dp[new_mask] = total
+                parent[new_mask] = vi
+
+    # Reconstruct the order by back-tracking parent pointers.
+    order: list[FuncKey] = []
+    mask = full
+    while mask:
+        vi = parent[mask]
+        order.append(nodes[vi])
+        mask ^= (1 << vi)
+    order.reverse()
+    return order
+
+def _scc_order_greedy(
+    members: tuple[FuncKey, ...],
+    deps_in_scc: dict[FuncKey, set[FuncKey]],
+    loc: dict[FuncKey, int],
+) -> list[FuncKey]:
+    """Greedy fallback for SCCs too large for bitmask DP."""
+
+    placed: set[FuncKey] = set()
+    order: list[FuncKey] = []
+ 
+    for _ in range(len(members)):
+        best = min(
+            (v for v in members if v not in placed),
+            key=lambda v: (
+                sum(loc.get(g, 0) for g in deps_in_scc.get(v, ()) if g not in placed),
+                v,
+            ),
+        )
+        order.append(best)
+        placed.add(best)
+ 
+    return order

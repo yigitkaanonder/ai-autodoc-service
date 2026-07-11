@@ -41,10 +41,20 @@ def make_worker(
 ):
     
     generated: dict = {}  # FuncKey -> the generated documentation
+
+    # loc map for SCC ordering (line count per function)
+    loc: dict[FuncKey, int] = {
+        fk: max(1, len(t.source.splitlines())) for fk, t in tasks.items()
+    }
  
     async def worker(component_id: int):
         members = cond.components[component_id]
         is_cycle = cond.is_cycle(component_id)
+
+        # Use optimized order for cycles
+        if is_cycle:
+            members = cond.resolve_scc_order(component_id, call_graph, loc)
+
         produced = {}
         for member in members:
             context_items = []
@@ -53,13 +63,18 @@ def make_worker(
             # dependencies inside change set
             for dep in sorted(call_graph.deps.get(member, ())):
                 if cond.node_to_comp.get(dep) == component_id:
-                    # same ssc, give code instead of document.
-                    dep_task = tasks.get(dep)
-                    if dep_task is not None:
-                        context_items.append(("source", dep, dep_task.source))
-                        resolved.append((dep.name, "CODE (cycle-mate)"))
+                    # same SCC: use doc if already generated, otherwise code
+                    doc = generated.get(dep)
+                    if doc is not None:
+                        context_items.append(("doc", dep, doc))
+                        resolved.append((dep.name, "DOCUMENTATION (cycle-mate, already generated)"))
                     else:
-                        resolved.append((dep.name, "NOT FOUND"))
+                        dep_task = tasks.get(dep)
+                        if dep_task is not None:
+                            context_items.append(("source", dep, dep_task.source))
+                            resolved.append((dep.name, "CODE (cycle-mate)"))
+                        else:
+                            resolved.append((dep.name, "NOT FOUND"))
                 else:
                     # previusly generated documentation
                     doc = generated.get(dep)
