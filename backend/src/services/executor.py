@@ -15,21 +15,23 @@ class FunctionTask:
     existing_documentation: str = ""
  
  
-# (func_key, code, context, task)
-DocumentFn = Callable[[FuncKey, str, str, FunctionTask], Awaitable[str]]
+# (func_key, code, deps, task)  — was: (func_key, code, context: str, task)
+DocumentFn = Callable[[FuncKey, str, list, FunctionTask], Awaitable[str]]
 # already documented
 FetchDocFn = Callable[[FuncKey], Optional[str]]
  
  
-def _format_context(items) -> str:
-    """items: [(kind, FuncKey, text)], kind in {'doc','source'}."""
-    if not items:
-        return ""
-    blocks = []
-    for kind, key, text in items:
-        label = "documentation" if kind == "doc" else "source"
-        blocks.append(f"# {key.name} ({label}):\n{text}")
-    return "\n\n".join(blocks)
+def _build_deps_list(items) -> list:
+    """
+    items: [(kind, FuncKey, text)], kind in {'doc', 'source'}.
+ 
+    Converts to the shape agents.generator.build_context_block expects:
+    [{"name": str, "kind": "doc"|"code", "text": str}, ...]
+    """
+    return [
+        {"name": key.name, "kind": "doc" if kind == "doc" else "code", "text": text}
+        for kind, key, text in items
+    ]
  
  
 def make_worker(
@@ -103,8 +105,8 @@ def make_worker(
             print(header)
  
             task = tasks[member]
-            context = _format_context(context_items)
-            doc = await document_fn(member, task.source, context, task)
+            deps = _build_deps_list(context_items)
+            doc = await document_fn(member, task.source, deps, task)
             generated[member] = doc
             produced[member] = doc
         return produced
@@ -115,7 +117,7 @@ def make_worker(
 def make_pipeline_document_fn(session_factory, repository_id, commit_sha=None):
     from pipeline import process_function
  
-    async def document_fn(func_key: FuncKey, code: str, context: str,
+    async def document_fn(func_key: FuncKey, code: str, deps: list,
                           task: FunctionTask) -> str:
         def _run():
             db = session_factory()
@@ -129,7 +131,7 @@ def make_pipeline_document_fn(session_factory, repository_id, commit_sha=None):
                     commit_sha=commit_sha,
                     mode=task.mode,
                     existing_documentation=task.existing_documentation,
-                    dependency_context=context,
+                    dependency_context=deps,
                 )
 
                 db.commit()

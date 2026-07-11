@@ -4,7 +4,7 @@ from services.doc_service import save_documentation_to_db
 _graph = build_graph()
 
 
-def process_function(db, repository_id, file_path, function_name, function_source, commit_sha=None, mode="added", existing_documentation="", dependency_context=""):
+def process_function(db, repository_id, file_path, function_name, function_source, commit_sha=None, mode="added", existing_documentation="", dependency_context=None):
 
     print(f"\n[Pipeline] Processing {file_path}::{function_name} (mode={mode})...")
 
@@ -13,7 +13,7 @@ def process_function(db, repository_id, file_path, function_name, function_sourc
         "function_name": function_name,
         "mode": mode,
         "existing_documentation": existing_documentation or "",
-        "context": dependency_context or "",
+        "deps": dependency_context or [],
         "documentation": "",
         "decision": "",
         "approved": False,
