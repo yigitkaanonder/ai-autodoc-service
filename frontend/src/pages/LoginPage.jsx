@@ -3,24 +3,13 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 
 function LoginPage() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
 
+  // If a valid session cookie already exists, skip straight to /repos.
+  // The cookie is HttpOnly so JS can't read it directly — we ask the server.
   useEffect(() => {
-    // OAuth callback'ten döndüyse URL'de username olur
-    const username = searchParams.get('username')
-    if (username) {
-      // username'i kaydet ve repos sayfasına git
-      localStorage.setItem('username', username)
-      navigate('/repos')
-    }
-  }, [searchParams, navigate])
-
-  // Daha önce giriş yapmışsa direkt yönlendir
-  useEffect(() => {
-    const saved = localStorage.getItem('username')
-    if (saved) {
-      navigate('/repos')
-    }
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then((res) => { if (res.ok) navigate('/repos') })
+      .catch(() => {})
   }, [navigate])
 
   function handleLogin() {

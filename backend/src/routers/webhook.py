@@ -1,3 +1,9 @@
+import hmac
+import hashlib
+import json
+import os
+from typing import Optional
+
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -10,15 +16,50 @@ from services.code_parser import extract_functions
 from services.events import event_hub
 from services.doc_service import get_latest_documentation
 from services.changeset_service import ChangedFunction, run_repo_changeset_async
+from limiter import limiter
 
 router = APIRouter()
 
 # Which file extensions to document
 SUPPORTED_EXTENSIONS = (".py", ".js", ".ts", ".go", ".java", ".cpp", ".cc", ".cxx", ".h", ".hpp")
 
+
+WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
+
+def verify_signature(raw_body: bytes, signature_header: Optional[str]) -> bool:
+    """Verify GitHub's X-Hub-Signature-256 HMAC over the exact raw request body.
+ 
+    GitHub signs the raw bytes it sends using the shared webhook secret. We
+    recompute that HMAC and compare in constant time. Any payload not signed
+    with our secret (i.e. a forged push) fails here and never reaches the
+    processing logic below.
+    """
+    # Fail closed: if no secret is configured, reject everything rather than
+    # silently accepting unsigned (forgeable) payloads.
+    if not WEBHOOK_SECRET:
+        return False
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+ 
+    expected = "sha256=" + hmac.new(
+        WEBHOOK_SECRET.encode(),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+ 
+    # constant-time compare to avoid timing side-channels
+    return hmac.compare_digest(expected, signature_header)
+
+
 @router.post("/webhook/github")
+@limiter.limit("60/minute")
 async def github_webhook(request: Request, db: Session = Depends(get_db)):
-    payload = await request.json()
+    raw_body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256")
+    if not verify_signature(raw_body, signature):
+        return JSONResponse(status_code=401, content={"error": "Invalid or missing signature"})
+ 
+    payload = json.loads(raw_body)
 
     repo_name = payload.get("repository", {}).get("full_name")
     pusher = payload.get("pusher", {}).get("name")
@@ -63,7 +104,6 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
         return JSONResponse(content={"status": "no_token"})
     
 
-    repository = get_repository(db, repo_name)
     if not repository:
         print(f"[Webhook] Repository {repo_name} not in DB (not activated?)")
         return JSONResponse(content={"status": "repo_not_found"})

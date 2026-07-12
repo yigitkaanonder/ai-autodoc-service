@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, Foreign
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
+from crypto import EncryptedString
 
 
 class Repository(Base):
@@ -50,7 +51,10 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)  # GitHub username
-    access_token = Column(String)
+    access_token = Column(EncryptedString)  # GitHub OAuth token, encrypted at rest
+    # Server-side session: we store only the SHA-256 hash of the session token.
+    session_token_hash = Column(String, unique=True, index=True, nullable=True)
+    session_expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     repositories = relationship("Repository", back_populates="user")

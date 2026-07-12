@@ -3,19 +3,21 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from database import get_db
-from models import Documentation, Repository
+from dependencies import get_current_user
+from models import Documentation, User
+from services.repo_service import get_owned_repository
 
 router = APIRouter()
 
 
 @router.get("/repos/{owner}/{name}/docs")
-def get_repo_docs(owner: str, name: str, db: Session = Depends(get_db)):
+def get_repo_docs(owner: str, name: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     repo_full_name = f"{owner}/{name}"
-    repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
+    repo = get_owned_repository(db, current_user.id, repo_full_name)
     if not repo:
         return JSONResponse(status_code=404, content={"error": "Repository not found"})
 
-   # latest event (row) per function, across ALL rows including tombstones
+    # latest event (row) per function, across ALL rows including tombstones
     latest_ids = db.query(
         func.max(Documentation.id).label('max_id')
     ).filter(
@@ -46,9 +48,9 @@ def get_repo_docs(owner: str, name: str, db: Session = Depends(get_db)):
 
 
 @router.get("/repos/{owner}/{name}/docs/{function_name}/history")
-def get_function_history(owner: str, name: str, function_name: str, db: Session = Depends(get_db)):
+def get_function_history(owner: str, name: str, function_name: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     repo_full_name = f"{owner}/{name}"
-    repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
+    repo = get_owned_repository(db, current_user.id, repo_full_name)
     if not repo:
         return JSONResponse(status_code=404, content={"error": "Repository not found"})
 

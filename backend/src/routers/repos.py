@@ -2,31 +2,28 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from database import get_db
+from dependencies import get_current_user
+from models import Documentation, Repository, FunctionRegistry, User
 from services.github import get_user_repos, create_webhook, delete_webhook
-from services.user_service import get_user_token
-from services.repo_service import save_repository
+from services.repo_service import save_repository, get_owned_repository
 from models import Documentation, Repository, FunctionRegistry
+from limiter import limiter
 
 router = APIRouter()
 
 
 @router.get("/repos")
-def list_repos(username: str, db: Session = Depends(get_db)):
-    access_token = get_user_token(db, username)
-    if not access_token:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Not authenticated"}
-        )
+def list_repos(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    repos = get_user_repos(current_user.access_token)
 
-    repos = get_user_repos(access_token)
-
-    # Get active repos from database
-    active_repos = db.query(Repository).filter(Repository.is_active == True).all()
+    active_repos = db.query(Repository).filter(
+        Repository.is_active == True,
+        Repository.user_id == current_user.id,
+    ).all()
     active_names = {r.full_name for r in active_repos}
 
     repo_list = [
@@ -40,18 +37,12 @@ def list_repos(username: str, db: Session = Depends(get_db)):
         for repo in repos
     ]
 
-    return JSONResponse(content={"username": username, "repos": repo_list})
+    return JSONResponse(content={"username": current_user.username, "repos": repo_list})
 
 
 @router.post("/repos/activate")
-def activate_repo(username: str, repo_full_name: str, db: Session = Depends(get_db)):
-    access_token = get_user_token(db, username)
-    if not access_token:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Not authenticated"}
-        )
-
+@limiter.limit("10/minute")
+def activate_repo(request: Request, repo_full_name: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     ngrok_url = os.getenv("NGROK_URL")
     if not ngrok_url:
         return JSONResponse(
@@ -60,15 +51,15 @@ def activate_repo(username: str, repo_full_name: str, db: Session = Depends(get_
         )
 
     webhook_url = f"{ngrok_url}/webhook/github"
-    result = create_webhook(access_token, repo_full_name, webhook_url)
+    result = create_webhook(current_user.access_token, repo_full_name, webhook_url)
 
     if "id" in result:
-        save_repository(db, username, repo_full_name, result["id"])
+        save_repository(db, current_user.username, repo_full_name, result["id"])
         repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
 
         # document history: root -> HEAD on first activation, or fill the gap on reactivation
         from services.backfill_service import backfill_repository
-        backfill_repository(db, access_token, repo_full_name, repo)
+        backfill_repository(db, current_user.access_token, repo_full_name, repo)
 
         return JSONResponse(content={
             "status": "activated",
@@ -76,25 +67,25 @@ def activate_repo(username: str, repo_full_name: str, db: Session = Depends(get_
             "webhook_id": result["id"]
         })
     
+    # Don't leak GitHub's raw API response to the client: keep the full detail
+    # in the server log, return only a short reason.
+    print(f"[activate] webhook creation failed for {repo_full_name}: {result}")
+    
     return JSONResponse(
         status_code=400,
-        content={"error": result.get("message", "Failed to create webhook"), "details": result}
+        content={"error": result.get("message", "Failed to create webhook")}
     )
 
 
 @router.post("/repos/deactivate")
-def deactivate_repo(username: str, repo_full_name: str, db: Session = Depends(get_db)):
-    access_token = get_user_token(db, username)
-    if not access_token:
-        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
-
-    repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
+def deactivate_repo(repo_full_name: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    repo = get_owned_repository(db, current_user.id, repo_full_name)
     if not repo:
         return JSONResponse(status_code=404, content={"error": "Repository not found"})
 
     # Delete webhook from GitHub
     if repo.webhook_id:
-        delete_webhook(access_token, repo_full_name, repo.webhook_id)
+        delete_webhook(current_user.access_token, repo_full_name, repo.webhook_id)
 
     # Just deactivate, keep data
     repo.is_active = False
@@ -105,12 +96,8 @@ def deactivate_repo(username: str, repo_full_name: str, db: Session = Depends(ge
 
 
 @router.post("/repos/delete-data")
-def delete_repo_data(username: str, repo_full_name: str, db: Session = Depends(get_db)):
-    access_token = get_user_token(db, username)
-    if not access_token:
-        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
-
-    repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
+def delete_repo_data(repo_full_name: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    repo = get_owned_repository(db, current_user.id, repo_full_name)
     if not repo:
         return JSONResponse(status_code=404, content={"error": "Repository not found"})
 

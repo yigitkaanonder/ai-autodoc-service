@@ -4,6 +4,7 @@ import { useNavigate, Link } from 'react-router-dom'
 function ReposPage() {
   const navigate = useNavigate()
   const [repos, setRepos] = useState([])
+  const [username, setUsername] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -15,16 +16,19 @@ function ReposPage() {
       return
     }
     fetchRepos()
-  }, [username, navigate])
+  }, [])
 
   function fetchRepos() {
-    fetch(`/api/repos?username=${username}`)
+    fetch('/api/repos', { credentials: 'include' })
       .then(res => {
+        if (res.status === 401) { navigate('/'); return null }
         if (!res.ok) throw new Error('Failed to fetch repos')
         return res.json()
       })
       .then(data => {
+        if (!data) return
         setRepos(data.repos)
+        setUsername(data.username)
         setLoading(false)
       })
       .catch(err => {
@@ -34,8 +38,9 @@ function ReposPage() {
   }
 
   function handleActivate(repoFullName) {
-    fetch(`/api/repos/activate?username=${username}&repo_full_name=${repoFullName}`, {
-      method: 'POST'
+    fetch(`/api/repos/activate?repo_full_name=${repoFullName}`, {
+      method: 'POST',
+      credentials: 'include'
     })
       .then(res => res.json())
       .then(data => {
@@ -51,8 +56,9 @@ function ReposPage() {
   function handleDeactivate(repoFullName) {
     if (!confirm(`Deactivate ${repoFullName}? This will remove the webhook. Documentation data will remain.`)) return
 
-    fetch(`/api/repos/deactivate?username=${username}&repo_full_name=${repoFullName}`, {
-      method: 'POST'
+    fetch(`/api/repos/deactivate?repo_full_name=${repoFullName}`, {
+      method: 'POST',
+      credentials: 'include'
     })
       .then(res => res.json())
       .then(data => {
@@ -68,8 +74,9 @@ function ReposPage() {
   function handleDeleteData(repoFullName) {
     if (!confirm(`Delete all documentation data for ${repoFullName}?`)) return
 
-    fetch(`/api/repos/delete-data?username=${username}&repo_full_name=${repoFullName}`, {
-      method: 'POST'
+    fetch(`/api/repos/delete-data?repo_full_name=${repoFullName}`, {
+      method: 'POST',
+      credentials: 'include'
     })
       .then(res => res.json())
       .then(data => {
@@ -82,6 +89,11 @@ function ReposPage() {
       .catch(err => alert(err.message))
   }
 
+  function handleLogout() {
+    fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
+      .finally(() => navigate('/'))
+  }
+
   if (loading) return <p>Loading repos...</p>
   if (error) return <p>Error: {error}</p>
 
@@ -89,7 +101,7 @@ function ReposPage() {
     <div style={{ maxWidth: '700px', margin: '40px auto', padding: '0 20px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h1>{username}'s Repositories</h1>
-        <button onClick={() => { localStorage.removeItem('username'); navigate('/') }}
+        <button onClick={handleLogout}
           style={{ padding: '8px 16px', cursor: 'pointer' }}>
           Logout
         </button>

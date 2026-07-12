@@ -99,15 +99,15 @@ function RepoDetailPage() {
 
   // ---- fetch the commit graph from the backend ----
   const fetchGraph = useCallback(() => {
-    // token is resolved from the logged-in user, so the graph works even
-    // for repos that haven't been activated yet.
-    const username = localStorage.getItem('username')
-    return fetch(`/api/repos/${owner}/${name}/commits?username=${username}`)
+    // Identity comes from the HttpOnly session cookie, sent automatically.
+    return fetch(`/api/repos/${owner}/${name}/commits`, { credentials: 'include' })
       .then((res) => {
+        if (res.status === 401) { window.location.href = '/'; return null }
         if (!res.ok) throw new Error('Failed to fetch commit graph')
         return res.json()
       })
       .then((data) => {
+        if (!data) return
         setBranches(data.branches || [])
         setCommits(data.commits || [])
         setDocumentedHeadSha(data.documented_head_sha || null)
@@ -122,7 +122,7 @@ function RepoDetailPage() {
 
   // ---- live updates over SSE ----
   useEffect(() => {
-    const es = new EventSource(`/api/repos/${owner}/${name}/events`)
+    const es = new EventSource(`/api/repos/${owner}/${name}/events`, { withCredentials: true })
     es.onopen = () => setLive(true)
     es.onerror = () => setLive(false) // browser auto-reconnects
     es.addEventListener('push', () => {
@@ -142,7 +142,7 @@ function RepoDetailPage() {
     if (!selectedSha) { setChanges(null); return }
     setChangesLoading(true)
     setExpandedDocId(null)
-    fetch(`/api/repos/${owner}/${name}/commits/${selectedSha}/changes`)
+    fetch(`/api/repos/${owner}/${name}/commits/${selectedSha}/changes`, { credentials: 'include' })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => setChanges(data))
       .catch(() => setChanges(null))
@@ -210,12 +210,11 @@ function RepoDetailPage() {
 
   const openSnapshot = () => {
     if (!selectedSha) return
-    const username = localStorage.getItem('username')
     setSnapshotOpen(true)
     setSnapshot(null)
     setSnapFile(null)
     setSnapshotLoading(true)
-    fetch(`/api/repos/${owner}/${name}/commits/${selectedSha}/snapshot?username=${username}`)
+    fetch(`/api/repos/${owner}/${name}/commits/${selectedSha}/snapshot`, { credentials: 'include' })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => setSnapshot(data))
       .catch(() => setSnapshot(null))

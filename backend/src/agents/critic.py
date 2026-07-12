@@ -8,6 +8,10 @@ load_dotenv()
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
 
+# (connect, read) timeout for Ollama calls. Read timeout is generous because a
+# local LLM (stream=False) only responds after the full answer is generated.
+OLLAMA_TIMEOUT = (5, 300)
+
 APPROVAL_THRESHOLD = 8
 
 
@@ -66,6 +70,7 @@ Documentation to review:
             "format": CRITIQUE_SCHEMA,
             "options": {"temperature": 0},
         },
+        timeout=OLLAMA_TIMEOUT,
     )
 
     result = json.loads(response.json()["message"]["content"])
@@ -123,6 +128,7 @@ Existing documentation:
             "format": GATE_SCHEMA,
             "options": {"temperature": 0},
         },
+        timeout=OLLAMA_TIMEOUT,
     )
  
     return json.loads(response.json()["message"]["content"])

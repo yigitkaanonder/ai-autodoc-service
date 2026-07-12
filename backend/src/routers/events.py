@@ -4,17 +4,23 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from database import get_db
-from services.github import fetch_commits_for_ref
-from services.user_service import get_user_token
+from dependencies import get_current_user
+from models import Documentation, FunctionRegistry, User
 from services.events import event_hub
-from models import Documentation, Repository, FunctionRegistry
+from services.repo_service import get_owned_repository
+from limiter import limiter
 
 router = APIRouter()
 
 
 @router.get("/repos/{owner}/{name}/events")
-async def repo_events(owner: str, name: str, request: Request):
+async def repo_events(owner: str, name: str, request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     repo_full_name = f"{owner}/{name}"
+
+    repo = get_owned_repository(db, current_user.id, repo_full_name)
+    if not repo:
+        return JSONResponse(status_code=404, content={"error": "Repository not found"})
+    
     queue = await event_hub.subscribe(repo_full_name)
 
     async def event_stream():
@@ -40,13 +46,10 @@ async def repo_events(owner: str, name: str, request: Request):
 
 
 @router.post("/repos/{owner}/{name}/backfill")
-def backfill_repo(owner: str, name: str, username: str, db: Session = Depends(get_db)):
-    access_token = get_user_token(db, username)
-    if not access_token:
-        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
-
+@limiter.limit("10/minute")
+def backfill_repo(request: Request, owner: str, name: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     repo_full_name = f"{owner}/{name}"
-    repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
+    repo = get_owned_repository(db, current_user.id, repo_full_name)
     if not repo:
         return JSONResponse(status_code=404, content={"error": "Repository not found"})
 
@@ -56,6 +59,6 @@ def backfill_repo(owner: str, name: str, username: str, db: Session = Depends(ge
     db.commit()
 
     from services.backfill_service import backfill_repository
-    result = backfill_repository(db, access_token, repo_full_name, repo)
+    result = backfill_repository(db, current_user.access_token, repo_full_name, repo)
 
     return JSONResponse(content={"repo": repo_full_name, **result})

@@ -3,28 +3,28 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from database import get_db
+from dependencies import get_current_user
+from models import Documentation, User
 from services.github import fetch_repo_branches, fetch_commits_for_ref
-from services.user_service import get_user_token
-from models import Documentation, Repository
+from services.repo_service import get_owned_repository
 
 router = APIRouter()
 
 @router.get("/repos/{owner}/{name}/commits")
-def get_repo_commit_graph(owner: str, name: str, username: str, db: Session = Depends(get_db)):
-    access_token = get_user_token(db, username)
-    if not access_token:
-        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
-
+def get_repo_commit_graph(owner: str, name: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     repo_full_name = f"{owner}/{name}"
-
+    repo = get_owned_repository(db, current_user.id, repo_full_name)
+    if not repo:
+        return JSONResponse(status_code=404, content={"error": "Repository not found"})
+    
     # every branch and its head commit
-    branches = fetch_repo_branches(access_token, repo_full_name)
+    branches = fetch_repo_branches(current_user.access_token, repo_full_name)
     branch_list = [{"name": b["name"], "head_sha": b["commit"]["sha"]} for b in branches]
 
     # walk each branch head to gather the full directed acyclic graph; dedupe by sha
     commits_by_sha = {}
     for branch in branch_list:
-        for raw in fetch_commits_for_ref(access_token, repo_full_name, branch["head_sha"]):
+        for raw in fetch_commits_for_ref(current_user.access_token, repo_full_name, branch["head_sha"]):
             sha = raw["sha"]
             if sha in commits_by_sha:
                 continue
@@ -44,19 +44,18 @@ def get_repo_commit_graph(owner: str, name: str, username: str, db: Session = De
     # newest first 
     commits = sorted(commits_by_sha.values(), key=lambda c: c["date"] or "", reverse=True)
 
-    repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
     return JSONResponse(content={
         "repo": repo_full_name,
         "branches": branch_list,
         "commits": commits,
-        "documented_head_sha": repo.documented_head_sha if repo else None,
+        "documented_head_sha": repo.documented_head_sha,
     })
 
 
 @router.get("/repos/{owner}/{name}/commits/{sha}/changes")
-def get_commit_changes(owner: str, name: str, sha: str, db: Session = Depends(get_db)):
+def get_commit_changes(owner: str, name: str, sha: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     repo_full_name = f"{owner}/{name}"
-    repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
+    repo = get_owned_repository(db, current_user.id, repo_full_name)
     if not repo:
         return JSONResponse(status_code=404, content={"error": "Repository not found"})
 
@@ -102,18 +101,14 @@ def get_commit_changes(owner: str, name: str, sha: str, db: Session = Depends(ge
 
 
 @router.get("/repos/{owner}/{name}/commits/{sha}/snapshot")
-def get_commit_snapshot(owner: str, name: str, sha: str, username: str, db: Session = Depends(get_db)):
-    access_token = get_user_token(db, username)
-    if not access_token:
-        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
-
+def get_commit_snapshot(owner: str, name: str, sha: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     repo_full_name = f"{owner}/{name}"
-    repo = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
+    repo = get_owned_repository(db, current_user.id, repo_full_name)
     if not repo:
         return JSONResponse(status_code=404, content={"error": "Repository not found"})
 
     # this commit + all its ancestors
-    ancestors = fetch_commits_for_ref(access_token, repo_full_name, sha, per_page=100)
+    ancestors = fetch_commits_for_ref(current_user.access_token, repo_full_name, sha, per_page=100)
     ancestor_shas = [c["sha"] for c in ancestors] or [sha]
 
     # latest documentation event per function, restricted to those commits

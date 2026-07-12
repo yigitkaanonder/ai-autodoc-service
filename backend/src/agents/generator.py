@@ -7,6 +7,11 @@ load_dotenv()
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
 
+# (connect, read) timeout for Ollama calls. The read timeout is generous because
+# local LLM generation (stream=False) returns only after the whole answer is
+# produced; too low a value would cut off legitimate generations.
+OLLAMA_TIMEOUT = (5, 300)
+
 # ---------------------------------------------------
 # Length Budget:
 # - Focal code length: 8000 characters
@@ -177,7 +182,8 @@ Rules (follow these EXACTLY):
             ],
             "stream": False,
             "options": {"temperature": 0.3},
-        }
+        },
+        timeout=OLLAMA_TIMEOUT,
     )
  
     doc = "## " + response.json()["message"]["content"]
