@@ -274,6 +274,9 @@ function RepoDetailPage() {
             <h1 className="rg-title">{owner}/{name}</h1>
             <div className="rg-subtitle">{commits.length} commits · {branches.length} branches</div>
           </div>
+          <button className="rg-back" onClick={() => navigate(`/repos/${owner}/${name}/docs`)}>
+            Documentation library →
+          </button>
           <div className="rg-spacer" />
           <div className={`rg-live ${live ? '' : 'offline'} ${flash ? 'flash' : ''}`}>
             <span className="rg-live-dot" />

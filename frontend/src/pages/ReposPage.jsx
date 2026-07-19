@@ -8,13 +8,7 @@ function ReposPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  const username = localStorage.getItem('username')
-
   useEffect(() => {
-    if (!username) {
-      navigate('/')
-      return
-    }
     fetchRepos()
   }, [])
 
