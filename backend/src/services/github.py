@@ -36,6 +36,23 @@ def get_user_repos(access_token: str) -> list:
     )
     return response.json()
 
+def user_can_access_repo(access_token: str, repo_full_name: str) -> bool:
+    """
+    True if the caller's token can see this repo on GitHub.
+
+    Used to authorize read endpoints without requiring a local repositories
+    row: GitHub is the source of truth for who may view a repo.
+    """
+    response = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github.v3+json"
+        },
+        timeout=GITHUB_TIMEOUT,
+    )
+    return response.status_code == 200
+
 def get_user_info(access_token: str) -> dict:
     response = requests.get(
         "https://api.github.com/user",
@@ -45,6 +62,20 @@ def get_user_info(access_token: str) -> dict:
         },
         timeout=GITHUB_TIMEOUT,
     )
+    return response.json()
+
+def list_webhooks(access_token: str, repo_full_name: str) -> list:
+    """Return the repository's existing webhooks, or [] if none/unreadable."""
+    response = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}/hooks",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github.v3+json"
+        },
+        timeout=GITHUB_TIMEOUT,
+    )
+    if response.status_code != 200:
+        return []
     return response.json()
 
 def create_webhook(access_token: str, repo_full_name: str, webhook_url: str) -> dict:
@@ -58,7 +89,15 @@ def create_webhook(access_token: str, repo_full_name: str, webhook_url: str) -> 
     webhook_secret = os.getenv("GITHUB_WEBHOOK_SECRET")
     if webhook_secret:
         config["secret"] = webhook_secret
- 
+
+    # Idempotency: GitHub rejects a second hook with the same target URL
+    # ("Hook already exists", 422). This happens whenever our DB lost the
+    # webhook_id but the hook still lives on GitHub (e.g. after a DB reset).
+    # Reuse the existing hook instead of failing.
+    for hook in list_webhooks(access_token, repo_full_name):
+        if (hook.get("config") or {}).get("url") == webhook_url:
+            return hook
+
     response = requests.post(
         f"https://api.github.com/repos/{repo_full_name}/hooks",
         headers={

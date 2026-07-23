@@ -15,7 +15,8 @@ def get_repo_docs(owner: str, name: str, current_user: User = Depends(get_curren
     repo_full_name = f"{owner}/{name}"
     repo = get_owned_repository(db, current_user.id, repo_full_name)
     if not repo:
-        return JSONResponse(status_code=404, content={"error": "Repository not found"})
+        # Not activated - no documentation has been generated yet.
+        return JSONResponse(content={"repo": repo_full_name, "docs": []})
 
     # latest event (row) per function, across ALL rows including tombstones
     latest_ids = db.query(
@@ -52,7 +53,10 @@ def get_function_history(owner: str, name: str, function_name: str, current_user
     repo_full_name = f"{owner}/{name}"
     repo = get_owned_repository(db, current_user.id, repo_full_name)
     if not repo:
-        return JSONResponse(status_code=404, content={"error": "Repository not found"})
+        # Not activated - no documentation history for this function.
+        return JSONResponse(content={
+            "repo": repo_full_name, "function_name": function_name, "history": [],
+        })
 
     docs = db.query(Documentation).filter(
         Documentation.repository_id == repo.id,

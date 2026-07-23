@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, NamedTuple, Optional
 
 # Use bitmask dp solution if the length of the SCC is <= SCC_DP_LIMIT. Otherwise, use greedy solution (not the most optimal).
-SCC_DP_LIMIT = 10
+SCC_DP_LIMIT = 20
 
 class FuncKey(NamedTuple):
     file_path: str

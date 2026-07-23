@@ -7,6 +7,7 @@ from database import get_db
 from dependencies import get_current_user
 from models import Documentation, FunctionRegistry, User
 from services.events import event_hub
+from services.github import user_can_access_repo
 from services.repo_service import get_owned_repository
 from limiter import limiter
 
@@ -14,13 +15,12 @@ router = APIRouter()
 
 
 @router.get("/repos/{owner}/{name}/events")
-async def repo_events(owner: str, name: str, request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def repo_events(owner: str, name: str, request: Request, current_user: User = Depends(get_current_user)):
     repo_full_name = f"{owner}/{name}"
 
-    repo = get_owned_repository(db, current_user.id, repo_full_name)
-    if not repo:
+    if not await asyncio.to_thread(user_can_access_repo, current_user.access_token, repo_full_name):
         return JSONResponse(status_code=404, content={"error": "Repository not found"})
-    
+
     queue = await event_hub.subscribe(repo_full_name)
 
     async def event_stream():
@@ -52,6 +52,9 @@ def backfill_repo(request: Request, owner: str, name: str, current_user: User = 
     repo = get_owned_repository(db, current_user.id, repo_full_name)
     if not repo:
         return JSONResponse(status_code=404, content={"error": "Repository not found"})
+
+    if not repo.is_active:
+        return JSONResponse(status_code=400, content={"error": "Repository is deactivated"})
 
     db.query(Documentation).filter(Documentation.repository_id == repo.id).delete()
     db.query(FunctionRegistry).filter(FunctionRegistry.repository_id == repo.id).delete()

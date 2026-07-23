@@ -15,6 +15,7 @@ class SchedulerResult:
     failures: dict = field(default_factory=dict)
     completion_order: list = field(default_factory=list)
     attempts: dict = field(default_factory=dict)
+    cancelled: bool = False
 
     @property
     def ok(self) -> bool:
@@ -35,6 +36,7 @@ async def run_scheduler(
     concurrency: int = 4,
     max_retries: int = 2,
     base_backoff: float = 0.5,
+    should_cancel: Callable[[], bool] = None,
 ) -> SchedulerResult:
 
     n = len(cond.components)
@@ -78,6 +80,14 @@ async def run_scheduler(
 
     completed = 0
     while completed < n:
+        if should_cancel is not None and should_cancel():
+            for task in running:
+                task.cancel()
+            if running:
+                await asyncio.gather(*running, return_exceptions=True)
+            result.cancelled = True
+            return result
+
         # Fill free slots with the highest-priority ready components.
         while ready and len(running) < concurrency:
             _, comp = heapq.heappop(ready)
@@ -88,7 +98,11 @@ async def run_scheduler(
                 "scheduler stalled: components remain but none are ready"
             )
 
-        done, _ = await asyncio.wait(list(running), return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait(
+            list(running),
+            timeout=0.2 if should_cancel is not None else None,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
         for task in done:
             comp = running.pop(task)
             status, payload = task.result()

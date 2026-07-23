@@ -1,0 +1,73 @@
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  font-family: var(--font-sans);
+  color: var(--rg-text);
+  background: var(--rg-bg);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  padding: 40px 32px;
+  text-align: center;
+  background: var(--rg-surface);
+  border: 1px solid var(--rg-border);
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+  animation: login-in 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes login-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.login-logo {
+  width: 60px;
+  height: 60px;
+  margin: 0 auto 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  border-radius: 16px;
+  background: #1f6feb;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.login-title {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 10px;
+}
+
+.login-subtitle {
+  color: var(--rg-muted);
+  font-size: var(--text-base);
+  line-height: var(--line-height-base);
+  margin-bottom: 28px;
+}
+
+.login-btn {
+  width: 100%;
+}
+
+.login-footer {
+  margin-top: 20px;
+  font-size: var(--text-xs);
+  color: var(--rg-muted);
+}
+
+/* loading placeholder mirrors the card's real layout */
+.login-skel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 4px 0;
+}

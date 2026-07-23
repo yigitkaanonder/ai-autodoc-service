@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
+import Button from '../components/ui/Button.jsx'
+import Modal from '../components/ui/Modal.jsx'
 import './RepoDetailPage.css'
 
 // ---- layout constants (tweak these to change graph density) ----
@@ -137,17 +139,20 @@ function RepoDetailPage() {
     }
   }, [owner, name, fetchGraph])
 
-    // ---- fetch changes when a commit is selected ----
-  useEffect(() => {
-    if (!selectedSha) { setChanges(null); return }
-    setChangesLoading(true)
+  // ---- load a commit's documentation changes on selection ----
+  // Handled in the click handler rather than a [selectedSha] effect so the
+  // synchronous resets don't trigger a cascading render (selection only ever
+  // changes through these clicks).
+  const selectCommit = useCallback((sha) => {
+    setSelectedSha(sha)
     setExpandedDocId(null)
-    fetch(`/api/repos/${owner}/${name}/commits/${selectedSha}/changes`, { credentials: 'include' })
+    setChangesLoading(true)
+    fetch(`/api/repos/${owner}/${name}/commits/${sha}/changes`, { credentials: 'include' })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => setChanges(data))
       .catch(() => setChanges(null))
       .finally(() => setChangesLoading(false))
-  }, [selectedSha, owner, name])
+  }, [owner, name])
 
   // ---- derived data ----
   // The lane algorithm needs newest-first order (a commit's parents always
@@ -199,11 +204,8 @@ function RepoDetailPage() {
       .sort((a, b) => a.file_path.localeCompare(b.file_path))
   }, [snapshot])
 
-  useEffect(() => {
-    if (snapshotFiles.length && !snapFile) setSnapFile(snapshotFiles[0].file_path)
-  }, [snapshotFiles, snapFile])
-
-  const activeSnapFile = snapshotFiles.find((f) => f.file_path === snapFile) || null
+  const effectiveSnapFile = snapFile || snapshotFiles[0]?.file_path || null
+  const activeSnapFile = snapshotFiles.find((f) => f.file_path === effectiveSnapFile) || null
 
   const selected = commits.find((c) => c.sha === selectedSha) || null
   const selectedDocumented = selected ? documentedSet.has(selected.sha) : false
@@ -269,14 +271,14 @@ function RepoDetailPage() {
     return (
       <div className="repo-graph">
         <div className="rg-header">
-          <button className="rg-back" onClick={() => navigate('/repos')}>← Repos</button>
+          <Button variant="ghost" size="sm" onClick={() => navigate('/repos')}>← Repos</Button>
           <div>
             <h1 className="rg-title">{owner}/{name}</h1>
             <div className="rg-subtitle">{commits.length} commits · {branches.length} branches</div>
           </div>
-          <button className="rg-back" onClick={() => navigate(`/repos/${owner}/${name}/docs`)}>
+          <Button variant="ghost" size="sm" onClick={() => navigate(`/repos/${owner}/${name}/docs`)}>
             Documentation library →
-          </button>
+          </Button>
           <div className="rg-spacer" />
           <div className={`rg-live ${live ? '' : 'offline'} ${flash ? 'flash' : ''}`}>
             <span className="rg-live-dot" />
@@ -331,21 +333,21 @@ function RepoDetailPage() {
                       fill={commit.is_merge ? 'var(--rg-bg)' : color}
                       stroke={color}
                       strokeWidth={commit.is_merge ? 2.5 : 1.5}
-                      onClick={() => setSelectedSha(commit.sha)}
+                      onClick={() => selectCommit(commit.sha)}
                     />
                   </g>
                 )
               })}
             </svg>
   
-            {displayCommits.map((commit, i) => {
+            {displayCommits.map((commit) => {
               const isDocumented = documentedSet.has(commit.sha)
               return (
                 <div
                   key={commit.sha}
                   className={`rg-row ${commit.sha === selectedSha ? 'selected' : ''}`}
                   style={{ height: ROW_HEIGHT, opacity: isDocumented ? 1 : 0.55 }}
-                  onClick={() => setSelectedSha(commit.sha)}
+                  onClick={() => selectCommit(commit.sha)}
                 >
                   <div style={{ width: graphWidth, flexShrink: 0 }} />
                   <div className="rg-cell rg-cell-msg">
@@ -379,12 +381,12 @@ function RepoDetailPage() {
                 <h3 className="rg-detail-msg">{selected.message}</h3>
                 <div className="rg-detail-meta">
                   <span><strong style={{ color: 'var(--rg-text)' }}>{selected.author}</strong> · {(selected.date || '').slice(0, 10)}</span>
-                  <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{selected.short_sha}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{selected.short_sha}</span>
                   {selected.is_merge && <span style={{ color: 'var(--rg-primary)' }}>merge</span>}
                 </div>
               </div>
               {selectedDocumented
-                ? <button className="rg-snapshot-btn" onClick={openSnapshot}>View full documentation here</button>
+                ? <Button variant="success" size="sm" onClick={openSnapshot}>View full documentation</Button>
                 : <span className="rg-not-documented">Not documented</span>}
             </div>
   
@@ -428,60 +430,59 @@ function RepoDetailPage() {
           </div>
         )}
   
-        {snapshotOpen && (
-          <div className="rg-overlay" onClick={() => setSnapshotOpen(false)}>
-            <div className="rg-modal" onClick={(e) => e.stopPropagation()}>
-              <div className="rg-modal-head">
-                <div>
-                  <div className="rg-modal-title">Documentation snapshot</div>
-                  <div className="rg-modal-sub">as of {selected ? selected.short_sha : ''}</div>
-                </div>
-                <button className="rg-modal-close" onClick={() => setSnapshotOpen(false)}>×</button>
+        <Modal
+          open={snapshotOpen}
+          onClose={() => setSnapshotOpen(false)}
+          ariaLabel="Documentation snapshot"
+          width={880}
+          bodyClassName="rg-snapshot-body"
+          title={
+            <div className="rg-snap-heading">
+              <span className="rg-snap-heading-title">Documentation snapshot</span>
+              <span className="rg-snap-heading-sub">as of {selected ? selected.short_sha : ''}</span>
+            </div>
+          }
+        >
+          {snapshotLoading && <div className="rg-snap-msg">Loading snapshot…</div>}
+          {!snapshotLoading && snapshotFiles.length === 0 &&
+            <div className="rg-snap-msg">No documentation at this commit.</div>}
+          {!snapshotLoading && snapshotFiles.length > 0 && (
+            <div className="rg-snap-cols" ref={snapColsRef}
+                 style={{ '--snap-files-w': `${snapFilesWidth}px` }}>
+              <div className="rg-snap-files">
+                {snapshotFiles.map((f) => (
+                  <button
+                    key={f.file_path}
+                    title={f.file_path}
+                    className={`rg-snap-file ${f.file_path === effectiveSnapFile ? 'active' : ''}`}
+                    onClick={() => setSnapFile(f.file_path)}
+                  >
+                    <span className="rg-snap-file-name">{f.file_path}</span>
+                    <span className="rg-snap-file-count">{f.docs.length}</span>
+                  </button>
+                ))}
               </div>
-              <div className="rg-modal-body">
-                {snapshotLoading && <div className="rg-snap-msg">Loading snapshot…</div>}
-                {!snapshotLoading && snapshotFiles.length === 0 &&
-                  <div className="rg-snap-msg">No documentation at this commit.</div>}
-                {!snapshotLoading && snapshotFiles.length > 0 && (
-                  <div className="rg-snap-cols" ref={snapColsRef}
-                       style={{ '--snap-files-w': `${snapFilesWidth}px` }}>
-                    <div className="rg-snap-files">
-                      {snapshotFiles.map((f) => (
-                        <button
-                          key={f.file_path}
-                          title={f.file_path}
-                          className={`rg-snap-file ${f.file_path === snapFile ? 'active' : ''}`}
-                          onClick={() => setSnapFile(f.file_path)}
-                        >
-                          <span className="rg-snap-file-name">{f.file_path}</span>
-                          <span className="rg-snap-file-count">{f.docs.length}</span>
-                        </button>
-                      ))}
-                    </div>
-                    <div className="rg-snap-resizer" onMouseDown={startSnapResize} />
-                    <div className="rg-snap-content">
-                      {activeSnapFile
-                        ? activeSnapFile.docs.map((doc) => (
-                            <div key={doc.id} className="rg-doc-card">
-                              <div className="rg-doc-card-head">
-                                <span className="rg-change-fn">{doc.function_name}</span>
-                                {doc.score != null && (
-                                  <span className="rg-snap-score">{doc.score}/10</span>
-                                )}
-                              </div>
-                              <div className="rg-doc-content">
-                                <ReactMarkdown>{doc.content || ''}</ReactMarkdown>
-                              </div>
-                            </div>
-                          ))
-                        : <div className="rg-snap-msg">Select a file to view its documentation.</div>}
-                    </div>
-                  </div>
-                )}
+              <div className="rg-snap-resizer" onMouseDown={startSnapResize} />
+              <div className="rg-snap-content">
+                {activeSnapFile
+                  ? activeSnapFile.docs.map((doc) => (
+                      <div key={doc.id} className="rg-doc-card">
+                        <div className="rg-doc-card-head">
+                          <span className="rg-change-fn">{doc.function_name}</span>
+                          {doc.score != null && (
+                            <span className="rg-snap-score">{doc.score}/10</span>
+                          )}
+                        </div>
+                        <div className="rg-doc-content">
+                          <ReactMarkdown>{doc.content || ''}</ReactMarkdown>
+                        </div>
+                      </div>
+                    ))
+                  : <div className="rg-snap-msg">Select a file to view its documentation.</div>}
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </Modal>
       </div>
     )
   }

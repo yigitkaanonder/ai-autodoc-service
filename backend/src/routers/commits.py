@@ -5,7 +5,7 @@ from sqlalchemy import func
 from database import get_db
 from dependencies import get_current_user
 from models import Documentation, User
-from services.github import fetch_repo_branches, fetch_commits_for_ref
+from services.github import fetch_repo_branches, fetch_commits_for_ref, user_can_access_repo
 from services.repo_service import get_owned_repository
 
 router = APIRouter()
@@ -13,10 +13,12 @@ router = APIRouter()
 @router.get("/repos/{owner}/{name}/commits")
 def get_repo_commit_graph(owner: str, name: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     repo_full_name = f"{owner}/{name}"
-    repo = get_owned_repository(db, current_user.id, repo_full_name)
-    if not repo:
+
+    if not user_can_access_repo(current_user.access_token, repo_full_name):
         return JSONResponse(status_code=404, content={"error": "Repository not found"})
-    
+
+    repo = get_owned_repository(db, current_user.id, repo_full_name)
+
     # every branch and its head commit
     branches = fetch_repo_branches(current_user.access_token, repo_full_name)
     branch_list = [{"name": b["name"], "head_sha": b["commit"]["sha"]} for b in branches]
@@ -41,14 +43,14 @@ def get_repo_commit_graph(owner: str, name: str, current_user: User = Depends(ge
                 "is_merge": len(parents) > 1,
             }
 
-    # newest first 
     commits = sorted(commits_by_sha.values(), key=lambda c: c["date"] or "", reverse=True)
 
     return JSONResponse(content={
         "repo": repo_full_name,
         "branches": branch_list,
         "commits": commits,
-        "documented_head_sha": repo.documented_head_sha,
+        # None when the repo isn't activated yet: nothing is documented.
+        "documented_head_sha": repo.documented_head_sha if repo else None,
     })
 
 
@@ -57,7 +59,11 @@ def get_commit_changes(owner: str, name: str, sha: str, current_user: User = Dep
     repo_full_name = f"{owner}/{name}"
     repo = get_owned_repository(db, current_user.id, repo_full_name)
     if not repo:
-        return JSONResponse(status_code=404, content={"error": "Repository not found"})
+        # Not activated - no documentation events exist for this repo.
+        return JSONResponse(content={
+            "repo": repo_full_name, "commit_sha": sha,
+            "added": [], "changed": [], "deleted": [],
+        })
 
     # all documentation events recorded at this commit
     rows = db.query(Documentation).filter(
@@ -105,7 +111,8 @@ def get_commit_snapshot(owner: str, name: str, sha: str, current_user: User = De
     repo_full_name = f"{owner}/{name}"
     repo = get_owned_repository(db, current_user.id, repo_full_name)
     if not repo:
-        return JSONResponse(status_code=404, content={"error": "Repository not found"})
+        # Not activated - no documentation snapshot exists for this repo.
+        return JSONResponse(content={"repo": repo_full_name, "commit_sha": sha, "docs": []})
 
     # this commit + all its ancestors
     ancestors = fetch_commits_for_ref(current_user.access_token, repo_full_name, sha, per_page=100)

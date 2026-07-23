@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
+import Button from '../components/ui/Button.jsx'
+import EmptyState from '../components/ui/EmptyState.jsx'
 import './DocsPage.css'
 
 function DocsPage() {
@@ -64,7 +66,7 @@ function DocsPage() {
   return (
     <div className="docs-page">
       <div className="dp-header">
-        <button className="dp-back" onClick={() => navigate(`/repos/${owner}/${name}`)}>← Graph</button>
+        <Button variant="ghost" size="sm" onClick={() => navigate(`/repos/${owner}/${name}`)}>← Graph</Button>
         <h1 className="dp-title">{owner}/{name} · Documentation</h1>
       </div>
 
@@ -88,7 +90,12 @@ function DocsPage() {
         </aside>
 
         <main className="dp-main">
-          {!selectedFn && <div className="dp-state">Select a function to read its documentation.</div>}
+          {!selectedFn && (
+            <EmptyState
+              title="No function selected"
+              message="Choose a function from the sidebar to read its generated documentation."
+            />
+          )}
           {selectedFn && (
             <>
               <div className="dp-content">

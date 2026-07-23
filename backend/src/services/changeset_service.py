@@ -8,12 +8,14 @@ try:
     from services.executor import (
         make_worker, make_pipeline_document_fn, FunctionTask, DocumentFn, FetchDocFn,
     )
+    from services.cancellation import register_run, unregister_run
 except ImportError:
     from call_graph import build_call_graph, condense, FuncKey
     from scheduler import run_scheduler, SchedulerResult
     from executor import (
         make_worker, make_pipeline_document_fn, FunctionTask, DocumentFn, FetchDocFn,
     )
+    from cancellation import register_run, unregister_run
  
  
 @dataclass
@@ -32,6 +34,7 @@ async def process_changeset(
     concurrency: int = 4,
     max_retries: int = 2,
     base_backoff: float = 0.5,
+    should_cancel=None,
 ) -> SchedulerResult:
     """
     Processes changed functions by building a call graph, resolving 
@@ -80,6 +83,7 @@ async def process_changeset(
     result = await run_scheduler(
         cond, worker,
         concurrency=concurrency, max_retries=max_retries, base_backoff=base_backoff,
+        should_cancel=should_cancel,
     )
 
 
@@ -149,14 +153,19 @@ async def run_repo_changeset_async(
     repo_functions = _repo_functions_excluding(db, repository_id, changeset_keys)
     fetch_existing_doc = _make_fetch_existing_doc(db, repository_id)
     doc_fn = document_fn or make_pipeline_document_fn(session_factory, repository_id, commit_sha)
- 
-    return await process_changeset(
-        changeset,
-        document_fn=doc_fn,
-        repo_functions=repo_functions,
-        fetch_existing_doc=fetch_existing_doc,
-        concurrency=concurrency,
-    )
+
+    cancel_event = register_run(repository_id)
+    try:
+        return await process_changeset(
+            changeset,
+            document_fn=doc_fn,
+            repo_functions=repo_functions,
+            fetch_existing_doc=fetch_existing_doc,
+            concurrency=concurrency,
+            should_cancel=cancel_event.is_set,
+        )
+    finally:
+        unregister_run(repository_id, cancel_event)
  
  
 def run_repo_changeset(

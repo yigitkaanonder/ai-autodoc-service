@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from database import get_db, SessionLocal
+from models import Documentation
 from services.github import get_file_content
 from services.user_service import get_user_token
 from services.repo_service import get_repository
@@ -90,6 +91,11 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
     # Every processed push extends coverage up to its HEAD commit, even
     # pushes that changed no code (docs are still current there).
     repository = get_repository(db, repo_name)
+    if repository and not repository.is_active:
+        print(f"[Webhook] {repo_name} is deactivated, ignoring push")
+        return JSONResponse(content={"status": "inactive"})
+
+    prev_head = repository.documented_head_sha if repository else None
     if repository and after_sha:
         repository.documented_head_sha = after_sha
         db.commit()
@@ -169,8 +175,19 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
         registry_updates[file_path] = new + changed
         processed.append(file_path)
 
+    result = None
     if changeset:
-        await run_repo_changeset_async(db, SessionLocal, repository.id, after_sha, changeset)
+        result = await run_repo_changeset_async(db, SessionLocal, repository.id, after_sha, changeset)
+
+    if result is not None and result.cancelled:
+        db.query(Documentation).filter(
+            Documentation.repository_id == repository.id,
+            Documentation.commit_sha == after_sha,
+        ).delete()
+        repository.documented_head_sha = prev_head
+        db.commit()
+        print(f"[Webhook] {repo_name}: cancelled, rolled back push")
+        return JSONResponse(content={"status": "cancelled", "repo": repo_name})
 
     for file_path, functions in registry_updates.items():
         update_registry(db, repository.id, file_path, functions)

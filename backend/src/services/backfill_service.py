@@ -14,6 +14,7 @@ from services.registry_service import (
 from services.doc_service import get_latest_documentation
 from services.changeset_service import ChangedFunction, run_repo_changeset
 from database import SessionLocal
+from models import Documentation
 
 # Same set the webhook uses
 SUPPORTED_EXTENSIONS = (".py", ".js", ".ts", ".go", ".java", ".cpp", ".cc", ".cxx", ".h", ".hpp")
@@ -64,7 +65,13 @@ def backfill_repository(db, access_token, repo_full_name, repository):
     print(f"\n[Backfill] {repo_full_name}: {len(to_process)} commit(s) to document "
           f"(branch '{default_branch}', starting at index {start_index})")
 
+    documented = 0
     for commit in to_process:
+        db.refresh(repository)
+        if not repository.is_active:
+            print(f"[Backfill] {repo_full_name}: deactivated, stopping after {documented} commit(s)")
+            return {"status": "deactivated", "commits": documented}
+
         sha = commit["sha"]
         files = fetch_commit_files(access_token, repo_full_name, sha)
 
@@ -112,8 +119,18 @@ def backfill_repository(db, access_token, repo_full_name, repository):
  
             registry_updates[file_path] = new + changed
 
+        result = None
         if changeset:
-            run_repo_changeset(db, SessionLocal, repository.id, sha, changeset)
+            result = run_repo_changeset(db, SessionLocal, repository.id, sha, changeset)
+
+        if result is not None and result.cancelled:
+            db.query(Documentation).filter(
+                Documentation.repository_id == repository.id,
+                Documentation.commit_sha == sha,
+            ).delete()
+            db.commit()
+            print(f"[Backfill] {repo_full_name}: cancelled during {sha[:7]}, rolled back partial commit")
+            return {"status": "cancelled", "commits": documented}
 
         # advance the registry per file AFTER documenting
         for file_path, functions in registry_updates.items():
@@ -126,7 +143,8 @@ def backfill_repository(db, access_token, repo_full_name, repository):
         # advance the high-water mark commit by commit
         repository.documented_head_sha = sha
         db.commit()
- 
-    print(f"[Backfill] {repo_full_name}: done ({len(to_process)} commits)")
-    return {"status": "backfilled", "commits": len(to_process)}
+        documented += 1
+
+    print(f"[Backfill] {repo_full_name}: done ({documented} commits)")
+    return {"status": "backfilled", "commits": documented}
  

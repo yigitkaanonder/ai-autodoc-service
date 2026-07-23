@@ -92,6 +92,9 @@ def deactivate_repo(repo_full_name: str, current_user: User = Depends(get_curren
     repo.webhook_id = None
     db.commit()
 
+    from services.cancellation import cancel_repo
+    cancel_repo(repo.id)
+
     return JSONResponse(content={"status": "deactivated", "repo": repo_full_name})
 
 
