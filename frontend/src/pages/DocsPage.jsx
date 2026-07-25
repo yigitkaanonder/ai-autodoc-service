@@ -5,6 +5,17 @@ import Button from '../components/ui/Button.jsx'
 import EmptyState from '../components/ui/EmptyState.jsx'
 import './DocsPage.css'
 
+// Format an ISO timestamp as dd/mm/yyyy HH:MM in UTC (GMT+0). We read the
+// components straight off the string instead of `new Date()` so a value
+// without a trailing 'Z' (e.g. the DB created_at) is not shifted to local time.
+function formatUtc(iso) {
+  if (!iso) return ''
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso)
+  if (!m) return iso.slice(0, 10)
+  const [, y, mo, d, h, mi] = m
+  return `${d}/${mo}/${y} ${h}:${mi} UTC`
+}
+
 function DocsPage() {
   const { owner, name } = useParams()
   const navigate = useNavigate()
@@ -17,6 +28,7 @@ function DocsPage() {
   const [history, setHistory] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [selectedVersionId, setSelectedVersionId] = useState(null)
+  const [commitDateBySha, setCommitDateBySha] = useState({})
 
   // ---- load current documentation (latest state per function) ----
   useEffect(() => {
@@ -28,6 +40,20 @@ function DocsPage() {
       .then((data) => { setDocs(data.docs || []); setError(null) })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
+  }, [owner, name])
+
+  // ---- load commit dates so version history can show when each commit was
+  // authored on GitHub, rather than when the doc row was written to the DB ----
+  useEffect(() => {
+    fetch(`/api/repos/${owner}/${name}/commits`, { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return
+        const map = {}
+        for (const c of data.commits || []) map[c.sha] = c.date
+        setCommitDateBySha(map)
+      })
+      .catch(() => {})
   }, [owner, name])
 
   // group functions by file for the sidebar
@@ -123,7 +149,7 @@ function DocsPage() {
                         ? <span className="dp-version-badge deleted">deleted</span>
                         : <span className="dp-version-badge">score {v.score}</span>}
                     </div>
-                    <div className="dp-version-date">{(v.created_at || '').slice(0, 10)}</div>
+                    <div className="dp-version-date">{formatUtc(commitDateBySha[v.commit_sha] || v.created_at)}</div>
                   </div>
                 ))}
               </aside>
