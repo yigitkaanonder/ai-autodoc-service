@@ -159,7 +159,7 @@ instead of its (not-yet-generated) doc. `resolve_scc_order` minimizes the cost o
 that: for an ordering, every intra-SCC dependency `f → g` where `g` is placed
 **after** `f` charges `loc[g]` (g's line count), because f must inline g's full
 source rather than its cheaper docs. A **bitmask DP** (`_scc_order_dp`,
-`O(2ⁿ·n)`) finds the exact minimum-cost order for components up to
+`O(2ⁿ·n²)`) finds the exact minimum-cost order for components up to
 **`SCC_DP_LIMIT = 20`** members; above that, `_scc_order_greedy` repeatedly picks
 the function adding the least not-yet-placed dependency cost. Both are
 deterministic (sorted tie-breaks).

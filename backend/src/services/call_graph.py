@@ -352,11 +352,11 @@ def _scc_order_dp(
     at position ``popcount(mask)`` adds ``loc[g]`` for every intra-SCC dependency
     *g* of *v* that is NOT yet in mask (g will come later → source is inlined).
 
-    Complexity: O(2^n · n)
+    Complexity: O(2^n · n^2)
 
     Deterministic tie-break: candidates are tried in sorted FuncKey order and the
-    table is updated only on strict improvement, so the lexicographically smallest
-    path wins among equal-cost alternatives.
+    table is updated only on strict improvement, so the same input always yields
+    the same ordering.
     """
     nodes = sorted(members)
     n = len(nodes)
